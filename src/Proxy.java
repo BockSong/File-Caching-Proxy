@@ -9,16 +9,17 @@ import java.util.concurrent.*;
 
 class Proxy {
 
-	// this should be thread-safe, no need to use synchronized()
+	// seems that don't work, still need to use synchronized()
 	private static List<Integer> avail_fds = Collections.synchronizedList(new ArrayList<Integer>());
-	// this is a compelte version of fd dict; currently don't store info about read/write permission
+	// here is a compelte record of fd (and the corresponding file)
 	private static ConcurrentHashMap<Integer, File> fd_f = new ConcurrentHashMap<Integer, File>();
 	// may try synchronizedmap if this one is not good enough
 	private static ConcurrentHashMap<Integer, RandomAccessFile> fd_raf = new ConcurrentHashMap<Integer, RandomAccessFile>();
 	
 	private static void init() {
-		for (int i = 5; i< 1024; i++)
-			avail_fds.add(i); // 5-1023
+		// avail_fds: 0-1023
+		for (int i = 0; i< 1024; i++)
+			avail_fds.add(i); 
 	}
 
 	private static class FileHandler implements FileHandling {
@@ -80,7 +81,7 @@ class Proxy {
 			}
 			fd_f.put(fd, f);
 
-			// Cannot actually open a directory
+			// Cannot actually open a directory using RandomAccessFile
 			if (!f.isDirectory()) {
 				try {
 					raf = new RandomAccessFile(path, mode);
@@ -157,9 +158,9 @@ class Proxy {
 				raf.write(buf);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
+				// since we can catch permission error here, read/write permissions of files are not explicitly stored
 				if (e instanceof IOException)
-					// permission error
-					return -99;  // Errors.EIO
+					return Errors.EBADF;
 				return -5;  // Errors.EIO
 			}
 
