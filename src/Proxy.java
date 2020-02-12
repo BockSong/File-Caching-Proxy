@@ -3,19 +3,22 @@
 import java.io.*;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.concurrent.*;
 
 class Proxy {
 
 	// this should be thread-safe, no need to use synchronized()
 	private static List<Integer> avail_fds = Collections.synchronizedList(new ArrayList<Integer>());
 	// may try synchronizedmap if this one is not good enough
-	private static Map<Integer, RandomAccessFile> fd_raf = new ConcurrentHashMap<String, RandomAccessFile>();
-	// this is to store read/write permission for every files
-	private static Map<Integer, File> fd_f = new ConcurrentHashMap<String, File>();
+	private static ConcurrentHashMap<Integer, RandomAccessFile> fd_raf = new ConcurrentHashMap<Integer, RandomAccessFile>();
+	// currently don't store read/write permission
+	private static ConcurrentHashMap<Integer, File> fd_f = new ConcurrentHashMap<Integer, File>();
 	
 	private static void init() {
-		for (int i = 0; i< 1024; i++)
-			avail_fds.add(i); // 0-1023
+		for (int i = 5; i< 1024; i++)
+			avail_fds.add(i); // 5-1023
 	}
 
 	private static class FileHandler implements FileHandling {
@@ -31,7 +34,7 @@ class Proxy {
 			File f;
 			String mode;
 			RandomAccessFile raf;
-			System.out.println("OPEN called from " + path);
+			System.out.println("--[OPEN] called from " + path);
 
 			if (avail_fds.size() == 0)
 				return Errors.EMFILE;
@@ -39,13 +42,13 @@ class Proxy {
 			f = new File(path);
 
 			switch (o) {
-				case OpenOption.READ:
+				case READ:
 					// must exist
 					if (!f.exists())
 						return Errors.ENOENT;
 					mode = "r";
 					break;
-				case OpenOption.WRITE:
+				case WRITE:
 					// must exist
 					if (!f.exists())
 						return Errors.ENOENT;
@@ -55,13 +58,13 @@ class Proxy {
 					mode = "rw";
 					break;
 				// both ok
-				case OpenOption.CREATE:
+				case CREATE:
 					// if exist, must be file rather than directory
 					if (f.exists() && f.isDirectory())
 						return Errors.EISDIR;
 					mode = "rw";
 					break;
-				case OpenOption.CREATE_NEW:
+				case CREATE_NEW:
 					// must not exist
 					if (!f.exists())
 						return Errors.EEXIST;
@@ -70,14 +73,20 @@ class Proxy {
 				default:
 					return Errors.EINVAL;
 			}
+			try {
+				raf = new RandomAccessFile(path, mode);
+			} catch (Exception e) {
+				System.out.println("throw IO exception");
+				return -5;  // Errors.EIO
+			}
 
-			raf = new RandomAccessFile(path, mode);
 			fd = avail_fds.get(0);
 			avail_fds.remove(0);
 			fd_raf.put(fd, raf);
 			fd_f.put(fd, f);
 
-			System.out.println("OPEN call done from " + fd);
+			System.out.println("OPEN call done from " + fd + " mode: " + mode);
+			System.out.println(" ");
 			return fd;
 		}
 
@@ -90,7 +99,7 @@ class Proxy {
 		 */
 		public int close( int fd ) {
 			RandomAccessFile raf;
-			System.out.println("close called from " + fd);
+			System.out.println("--[CLOSE] called from " + fd);
 			if (!fd_raf.containsKey(fd))
 				return Errors.EBADF;
 
@@ -99,12 +108,15 @@ class Proxy {
 			try {
 				raf.close();
 			} catch (Exception e) {
-				return Errors.EIO;
+				System.out.println("throw IO exception");
+				return -5;  // Errors.EIO
 			}
 
 			fd_raf.remove(fd);
 			fd_f.remove(fd);
 			avail_fds.add(fd);
+
+			System.out.println(" ");
 			return 0;
 		}
 
@@ -119,7 +131,7 @@ class Proxy {
 		public long write( int fd, byte[] buf ) {
 			File f;
 			RandomAccessFile raf;
-			System.out.println("write called from " + fd);
+			System.out.println("--[WRITE] called from " + fd);
 			if (!fd_raf.containsKey(fd))
 				return Errors.EBADF;
 
@@ -132,10 +144,15 @@ class Proxy {
 			try {
 				raf.write(buf);
 			} catch (Exception e) {
-				if (e == IOException)
-					return Errors.EIO;
-				return Errors.EIO;
+				System.out.println("throw IO exception");
+				if (e instanceof IOException)
+					// permission error
+					return -99;  // Errors.EIO
+				return -5;  // Errors.EIO
 			}
+
+			System.out.println("Write " + buf.length + " byte: " + buf);
+			System.out.println(" ");
 			return buf.length;
 		}
 
@@ -151,7 +168,7 @@ class Proxy {
 			File f;
 			int read_len;
 			RandomAccessFile raf;
-			System.out.println("read called from " + fd);
+			System.out.println("--[READ] called from " + fd);
 			if (!fd_raf.containsKey(fd))
 				return Errors.EBADF;
 
@@ -161,14 +178,17 @@ class Proxy {
 
 			raf = fd_raf.get(fd);
 
-			// TODO: handle error
 			try {
 				read_len = raf.read(buf);
 			} catch (Exception e) {
-				return Errors.EIO;
+				System.out.println("throw IO exception");
+				return -5;  // Errors.EIO
 			}
 			if (read_len == -1)
 				read_len = 0;
+
+			System.out.println("Read " + read_len + " byte: " + buf);
+			System.out.println(" ");
 			return read_len;
 		}
 
@@ -181,39 +201,44 @@ class Proxy {
 		 * returned and errno is set to indicate the error.
 		 */
 		public long lseek( int fd, long pos, LseekOption o ) {
+			File f;
 			long seek_loc = pos;
 			RandomAccessFile raf;
-			System.out.println("lseek called from " + fd);
+			System.out.println("--[LSEEK] called from " + fd);
 			if (!fd_raf.containsKey(fd))
 				return Errors.EBADF;
 
-			if (o != OpenOption.READ && f.isDirectory())
+			f = fd_f.get(fd);
+			if (f.isDirectory())
 				return Errors.EISDIR;
 
 			raf = fd_raf.get(fd);
 
-			switch (o) {
-				case LseekOption.FROM_START:
-					break;
-				case LseekOption.FROM_END:
-					seek_loc += raf.length();
-					break;
-				case LseekOption.FROM_CURRENT:
-					seek_loc += raf.getFilePointer();
-					break;
-				default:
-					return Errors.EINVAL;
-			}
-
-			if (seek_loc < 0)
-				return Errors.EINVAL;
-
-			// TODO: handle error
 			try {
+				switch (o) {
+					case FROM_START:
+						break;
+					case FROM_END:
+						seek_loc += raf.length();
+						break;
+					case FROM_CURRENT:
+						seek_loc += raf.getFilePointer();
+						break;
+					default:
+						return Errors.EINVAL;
+				}
+	
+				if (seek_loc < 0)
+					return Errors.EINVAL;
+	
 				raf.seek(seek_loc);
 			} catch (Exception e) {
-				return Errors.EIO;
+				System.out.println("throw IO exception");
+				return -5;  // Errors.EIO
 			}
+
+			System.out.println("pos: " + pos);
+			System.out.println(" ");
 			return seek_loc;
 		}
 
@@ -226,7 +251,7 @@ class Proxy {
 		 */
 		public int unlink( String path ) {
 			File f;
-			System.out.println("unlink called from " + path);
+			System.out.println("--[UNLINK] called from " + path);
 			
 			f = new File(path);
 			if (!f.exists())
@@ -237,13 +262,16 @@ class Proxy {
 			try {
 				f.delete();
 			} catch (Exception e) {
-				return Errors.EIO;
+				System.out.println("throw IO exception");
+				return -5;  // Errors.EIO
 			}
+
+			System.out.println(" ");
 			return 0;
 		}
 
 		public void clientdone() {
-			System.out.println("clientdone\n");
+			System.out.println("------client done\n");
 			// clean up any state here
 			return;
 		}
