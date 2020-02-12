@@ -74,8 +74,10 @@ class Proxy {
 					return Errors.EINVAL;
 			}
 
-			fd = avail_fds.get(0);
-			avail_fds.remove(0);
+			synchronized (avail_fds) {
+				fd = avail_fds.get(0);
+				avail_fds.remove(0);
+			}
 			fd_f.put(fd, f);
 
 			// Cannot actually open a directory
@@ -122,7 +124,9 @@ class Proxy {
 			}
 
 			fd_f.remove(fd);
-			avail_fds.add(fd);
+			synchronized (avail_fds) {
+				avail_fds.add(fd);
+			}
 
 			System.out.println(" ");
 			return 0;
