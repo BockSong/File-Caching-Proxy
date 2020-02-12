@@ -11,10 +11,10 @@ class Proxy {
 
 	// this should be thread-safe, no need to use synchronized()
 	private static List<Integer> avail_fds = Collections.synchronizedList(new ArrayList<Integer>());
+	// this is a compelte version of fd dict; currently don't store info about read/write permission
+	private static ConcurrentHashMap<Integer, File> fd_f = new ConcurrentHashMap<Integer, File>();
 	// may try synchronizedmap if this one is not good enough
 	private static ConcurrentHashMap<Integer, RandomAccessFile> fd_raf = new ConcurrentHashMap<Integer, RandomAccessFile>();
-	// currently don't store read/write permission
-	private static ConcurrentHashMap<Integer, File> fd_f = new ConcurrentHashMap<Integer, File>();
 	
 	private static void init() {
 		for (int i = 5; i< 1024; i++)
@@ -66,24 +66,28 @@ class Proxy {
 					break;
 				case CREATE_NEW:
 					// must not exist
-					if (!f.exists())
+					if (f.exists())
 						return Errors.EEXIST;
 					mode = "rw";
 					break;
 				default:
 					return Errors.EINVAL;
 			}
-			try {
-				raf = new RandomAccessFile(path, mode);
-			} catch (Exception e) {
-				System.out.println("throw IO exception");
-				return -5;  // Errors.EIO
-			}
 
 			fd = avail_fds.get(0);
 			avail_fds.remove(0);
-			fd_raf.put(fd, raf);
 			fd_f.put(fd, f);
+
+			// Cannot actually open a directory
+			if (!f.isDirectory()) {
+				try {
+					raf = new RandomAccessFile(path, mode);
+					fd_raf.put(fd, raf);
+				} catch (Exception e) {
+					System.out.println("throw IOException");
+					return -5;  // EIO
+				}
+			}
 
 			System.out.println("OPEN call done from " + fd + " mode: " + mode);
 			System.out.println(" ");
@@ -98,21 +102,25 @@ class Proxy {
 		 * error.
 		 */
 		public int close( int fd ) {
+			File f;
 			RandomAccessFile raf;
 			System.out.println("--[CLOSE] called from " + fd);
 			if (!fd_raf.containsKey(fd))
 				return Errors.EBADF;
 
-			raf = fd_raf.get(fd);
+			f = fd_f.get(fd);
 			
-			try {
-				raf.close();
-			} catch (Exception e) {
-				System.out.println("throw IO exception");
-				return -5;  // Errors.EIO
+			if (!f.isDirectory()) {
+				try {
+					raf = fd_raf.get(fd);
+					raf.close();
+					fd_raf.remove(fd);
+				} catch (Exception e) {
+					System.out.println("throw IO exception");
+					return -5;  // Errors.EIO
+				}
 			}
 
-			fd_raf.remove(fd);
 			fd_f.remove(fd);
 			avail_fds.add(fd);
 
@@ -132,7 +140,7 @@ class Proxy {
 			File f;
 			RandomAccessFile raf;
 			System.out.println("--[WRITE] called from " + fd);
-			if (!fd_raf.containsKey(fd))
+			if (!fd_f.containsKey(fd))
 				return Errors.EBADF;
 
 			f = fd_f.get(fd);
@@ -169,7 +177,7 @@ class Proxy {
 			int read_len;
 			RandomAccessFile raf;
 			System.out.println("--[READ] called from " + fd);
-			if (!fd_raf.containsKey(fd))
+			if (!fd_f.containsKey(fd))
 				return Errors.EBADF;
 
 			f = fd_f.get(fd);
@@ -205,7 +213,7 @@ class Proxy {
 			long seek_loc = pos;
 			RandomAccessFile raf;
 			System.out.println("--[LSEEK] called from " + fd);
-			if (!fd_raf.containsKey(fd))
+			if (!fd_f.containsKey(fd))
 				return Errors.EBADF;
 
 			f = fd_f.get(fd);
