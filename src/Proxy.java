@@ -9,7 +9,8 @@ import java.util.concurrent.*;
 
 class Proxy {
 
-	// seems that don't work, still need to use synchronized()
+	public static final int EIO = -5;
+	// Note: need to add synchronized for func, in this way don't need to use lock (synchronized method)
 	private static List<Integer> avail_fds = Collections.synchronizedList(new ArrayList<Integer>());
 	// here is a compelte record of fd (and the corresponding file)
 	private static ConcurrentHashMap<Integer, File> fd_f = new ConcurrentHashMap<Integer, File>();
@@ -88,7 +89,7 @@ class Proxy {
 					fd_raf.put(fd, raf);
 				} catch (Exception e) {
 					System.out.println("throw IOException");
-					return -5;  // EIO
+					return EIO;
 				}
 			}
 
@@ -120,7 +121,7 @@ class Proxy {
 					fd_raf.remove(fd);
 				} catch (Exception e) {
 					System.out.println("throw IO exception");
-					return -5;  // Errors.EIO
+					return EIO;
 				}
 			}
 
@@ -161,7 +162,7 @@ class Proxy {
 				// since we can catch permission error here, read/write permissions of files are not explicitly stored
 				if (e instanceof IOException)
 					return Errors.EBADF;
-				return -5;  // Errors.EIO
+				return EIO;
 			}
 
 			System.out.println("Write " + buf.length + " byte: " + buf);
@@ -195,7 +196,7 @@ class Proxy {
 				read_len = raf.read(buf);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
-				return -5;  // Errors.EIO
+				return EIO;
 			}
 			if (read_len == -1)
 				read_len = 0;
@@ -247,7 +248,7 @@ class Proxy {
 				raf.seek(seek_loc);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
-				return -5;  // Errors.EIO
+				return EIO;
 			}
 
 			System.out.println("pos: " + pos);
@@ -276,7 +277,7 @@ class Proxy {
 				f.delete();
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
-				return -5;  // Errors.EIO
+				return EIO;
 			}
 
 			System.out.println(" ");
