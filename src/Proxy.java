@@ -1,6 +1,7 @@
 /* Sample skeleton for proxy */
 
 import java.io.*;
+import java.rmi.Naming;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
@@ -16,6 +17,8 @@ class Proxy {
 	private static ConcurrentHashMap<Integer, File> fd_f = new ConcurrentHashMap<Integer, File>();
 	// may try synchronizedmap if this one is not good enough
 	private static ConcurrentHashMap<Integer, RandomAccessFile> fd_raf = new ConcurrentHashMap<Integer, RandomAccessFile>();
+
+	private static ServerIntf server;
 	
 	private static void init() {
 		// avail_fds: 0-1023
@@ -307,18 +310,26 @@ class Proxy {
 		try {
 			port = Integer.parseInt(args[1]);
 			cachesize = Integer.parseInt(args[3]);
-		}
-		catch (NumberFormatException e)
+		} catch (NumberFormatException e)
 		{
 			System.out.println("NumberFormatException in parsing args. \n");
 			port = 15440;
 			cachesize = 100000;
 		}
+		System.out.println("Server ip: " + serverip + "\nServer port: " + port);
+		System.out.println("cachedir: " + cachedir + "\ncachesize: " + cachesize);
 
 		init();
-		System.out.println("Proxy initialized. \n");
-		System.out.println("Serverip: " + serverip + "\nport: " + port);
-		System.out.println("cachedir: " + cachedir + "\ncachesize: " + cachesize);
+		System.out.println("Proxy initialized.");
+
+		// connect to server
+		try {
+			server = (ServerIntf) Naming.lookup("//" + serverip + ":" + port + "/ServerIntf");
+			System.out.println("Connection built. \n");
+		} catch (Exception e) {
+			System.out.println("NotBoundException in connection.");
+		}
+
 		(new RPCreceiver(new FileHandlingFactory())).run();
 	}
 }
