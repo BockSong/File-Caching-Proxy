@@ -299,9 +299,26 @@ class Proxy {
 	}
 
 	public static void main(String[] args) throws IOException {
-		System.out.println("Hello World");
+		// These are args to connect to the server
+		int port, cachesize;
+		String serverip, cachedir;
+		serverip = args[0];
+		cachedir = args[2];
+		try {
+			port = Integer.parseInt(args[1]);
+			cachesize = Integer.parseInt(args[3]);
+		}
+		catch (NumberFormatException e)
+		{
+			System.out.println("NumberFormatException in parsing args. \n");
+			port = 15440;
+			cachesize = 100000;
+		}
+
 		init();
+		System.out.println("Proxy initialized. \n");
+		System.out.println("Serverip: " + serverip + "\nport: " + port);
+		System.out.println("cachedir: " + cachedir + "\ncachesize: " + cachesize);
 		(new RPCreceiver(new FileHandlingFactory())).run();
 	}
 }
-
