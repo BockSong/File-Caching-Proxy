@@ -23,30 +23,33 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     }
 
     private String getRemotepath( String path ) {
+        // TODO: need to deal with corner case of path format
         return rootdir + "/" + path;
     }
 
     // client call this to download file
     public FileInfo getFile( String path )
             throws RemoteException {
-        try {
-            FileInfo f = new FileInfo();
-            f.path = path;
+        FileInfo f = new FileInfo();
+        String remotePath = getRemotepath(path);
+        f.path = path;
+        System.out.println("[getFile] remotePath: " + remotePath);
 
-            File file = new File(path);
+        try {
+            File file = new File(remotePath);
             byte buffer[] = new byte[(int) file.length()];
             BufferedInputStream input = new
-            BufferedInputStream(new FileInputStream(path));
+            BufferedInputStream(new FileInputStream(remotePath));
             input.read(buffer, 0, buffer.length);
             input.close();
             f.filedata = buffer;
 
-            return f;
         } catch(Exception e) {
-            System.out.println("getFile: " + e.getMessage());
+            System.out.println("Error in getFile: " + e.getMessage());
             e.printStackTrace();
-            return null;
+            f.filedata = null;
         }
+        return f;
     }
 
     // client call this to upload file
@@ -55,15 +58,16 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
         try {
             String remotePath = getRemotepath(f.path);
             byte[] f_data = f.filedata;
+            System.out.println("[setFile] remotePath: " + remotePath);
     
             File file = new File(remotePath);
-            BufferedOutputStream output = new BufferedOutputStream(new FileOutputStream(file.getName()));
+            BufferedOutputStream output = new BufferedOutputStream(new FileOutputStream(remotePath));
             output.write(f_data, 0, f_data.length);
             output.flush();
             output.close();
             
         } catch (Exception e) {
-            System.out.println("setFile: " + e.getMessage());
+            System.out.println("Error in setFile: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -84,8 +88,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			System.out.println("NumberFormatException in parsing args.");
 			port = 15440;
 		}
-		System.out.println("port: " + port + "\nrootdir: " + rootdir);
 		rootdir = args[1];
+		System.out.println("port: " + port + "\nrootdir: " + rootdir);
 
         try { // create registry if it doesn’t exist
             LocateRegistry.createRegistry(port);

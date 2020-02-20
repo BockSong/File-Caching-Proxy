@@ -36,6 +36,11 @@ class Proxy {
 		return cachedir + "/" + path;
 	}
 
+	private static String get_oriPath( String path ) {
+		String split = "cache/";
+		return path.substring(split.length());
+	}
+
 	private static class FileHandler implements FileHandling {
 
 		/*
@@ -47,14 +52,34 @@ class Proxy {
 		public int open( String path, OpenOption o ) {
 			int fd;
 			File f;
-			String mode;
+			String mode, localPath;
 			RandomAccessFile raf;
-			System.out.println("--[OPEN] called from " + path);
+			
+			localPath = get_localPath(path);
+			System.out.println("--[OPEN] called from localPath：" + localPath);
 
 			if (avail_fds.size() == 0)
 				return Errors.EMFILE;
 
-			f = new File(path);
+			f = new File(localPath);
+			// TODO: currently always download the file rather than check on use first
+			try {
+				// TODO: currently only consider the case when the file exists remotely
+				FileInfo fi = new FileInfo();
+				System.out.println("downloading of path: " + path);
+				fi = server.getFile(path);
+
+				// save the file locally
+				byte[] fi_data = fi.filedata;
+				File file = new File(localPath);
+				BufferedOutputStream output = new BufferedOutputStream(new FileOutputStream(localPath));
+				output.write(fi_data, 0, fi_data.length);
+				output.flush();
+				output.close();
+			} catch (Exception e) {
+				System.out.println("Error in open: " + e.getMessage());
+				e.printStackTrace();
+			}
 
 			switch (o) {
 				case READ:
@@ -98,19 +123,6 @@ class Proxy {
 			// Cannot actually open a directory using RandomAccessFile
 			if (!f.isDirectory()) {
 				try {
-					// TODO: currently only consider the case when the file exists
-					FileInfo fi = new FileInfo();
-					fi = server.getFile(path);
-					byte[] fi_data = fi.filedata;
-
-					// save the file locally
-					String localPath = get_localPath(path);
-					File file = new File(localPath);
-					BufferedOutputStream output = new BufferedOutputStream(new FileOutputStream(file.getName()));
-					output.write(fi_data, 0, fi_data.length);
-					output.flush();
-					output.close();
-			
 					raf = new RandomAccessFile(localPath, mode);
 
 					fd_raf.put(fd, raf);
@@ -148,11 +160,11 @@ class Proxy {
 					
 					// use RPC call to upload a file from cache
 					FileInfo fi = new FileInfo();
-					String localPath = f.getPath();
-					fi.path = localPath; // TODO: here path need to be fixed
-		
+					fi.path = get_oriPath(f.getPath());
+					System.out.println("uploading of oriPath: " + fi.path);
+
 					byte buffer[] = new byte[(int) f.length()];
-					BufferedInputStream input = new BufferedInputStream(new FileInputStream(localPath));
+					BufferedInputStream input = new BufferedInputStream(new FileInputStream(f.getPath()));
 					input.read(buffer, 0, buffer.length);
 					input.close();
 					fi.filedata = buffer;
@@ -373,9 +385,9 @@ class Proxy {
 		// connect to server
 		try {
 			server = (ServerIntf) Naming.lookup("//" + serverip + ":" + port + "/ServerIntf");
-			System.out.println("Connection built. \n");
+			System.out.println("Connection built.");
 		} catch (Exception e) {
-			System.out.println("NotBoundException in connection.");
+			System.out.println("NotBoundException in connection. \n");
 		}
 
 		(new RPCreceiver(new FileHandlingFactory())).run();
