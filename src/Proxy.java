@@ -55,7 +55,7 @@ class Proxy {
 			RandomAccessFile raf;
 			
 			localPath = get_localPath(path);
-			System.out.println("--[OPEN] called from localPath：" + localPath);
+			System.out.println("--[OPEN] called from localPath: " + localPath);
 
 			if (avail_fds.size() == 0)
 				return Errors.EMFILE;

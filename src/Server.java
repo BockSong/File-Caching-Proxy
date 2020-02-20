@@ -103,7 +103,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 		rootdir = args[1];
 		System.out.println("port: " + port + "\nrootdir: " + rootdir);
 
-        try { // create registry if it doesn’t exist
+        try { // create registry if it doesn't exist
             LocateRegistry.createRegistry(port);
         }
         catch (RemoteException e) {
