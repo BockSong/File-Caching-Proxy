@@ -37,8 +37,7 @@ class Proxy {
 	}
 
 	private static String get_oriPath( String path ) {
-		String split = "cache/";
-		return path.substring(split.length());
+		return path.substring(cachedir.length() + 1);
 	}
 
 	private static class FileHandler implements FileHandling {
