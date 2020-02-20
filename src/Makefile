@@ -5,3 +5,5 @@ all: Proxy.class Server.class
 
 clean:
 	rm -f *.class
+
+# -Xms5m # memory limitation

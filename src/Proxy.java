@@ -18,12 +18,22 @@ class Proxy {
 	// may try synchronizedmap if this one is not good enough
 	private static ConcurrentHashMap<Integer, RandomAccessFile> fd_raf = new ConcurrentHashMap<Integer, RandomAccessFile>();
 
+	private static int cachesize;
+	private static String cachedir;
+
 	private static ServerIntf server;
 	
-	private static void init() {
+	private static void init( String ca_dir, int ca_size ) {
+		cachesize = ca_size;
+		cachedir = ca_dir;
+
 		// avail_fds: 0-1023
 		for (int i = 0; i< 1024; i++)
 			avail_fds.add(i); 
+	}
+
+	private static String get_localPath( String path ) {
+		return cachedir + "/" + path;
 	}
 
 	private static class FileHandler implements FileHandling {
@@ -88,7 +98,21 @@ class Proxy {
 			// Cannot actually open a directory using RandomAccessFile
 			if (!f.isDirectory()) {
 				try {
-					raf = new RandomAccessFile(path, mode);
+					// TODO: currently only consider the case when the file exists
+					FileInfo fi = new FileInfo();
+					fi = server.getFile(path);
+					byte[] fi_data = fi.filedata;
+
+					// save the file locally
+					String localPath = get_localPath(path);
+					File file = new File(localPath);
+					BufferedOutputStream output = new BufferedOutputStream(new FileOutputStream(file.getName()));
+					output.write(fi_data, 0, fi_data.length);
+					output.flush();
+					output.close();
+			
+					raf = new RandomAccessFile(localPath, mode);
+
 					fd_raf.put(fd, raf);
 				} catch (Exception e) {
 					System.out.println("throw IOException");
@@ -121,6 +145,20 @@ class Proxy {
 				try {
 					raf = fd_raf.get(fd);
 					raf.close();
+					
+					// use RPC call to upload a file from cache
+					FileInfo fi = new FileInfo();
+					String localPath = f.getPath();
+					fi.path = localPath; // TODO: here path need to be fixed
+		
+					byte buffer[] = new byte[(int) f.length()];
+					BufferedInputStream input = new BufferedInputStream(new FileInputStream(localPath));
+					input.read(buffer, 0, buffer.length);
+					input.close();
+					fi.filedata = buffer;
+
+					server.setFile(fi);
+
 					fd_raf.remove(fd);
 				} catch (Exception e) {
 					System.out.println("throw IO exception");
@@ -159,10 +197,11 @@ class Proxy {
 			raf = fd_raf.get(fd);
 
 			try {
+				// should be nothing different
 				raf.write(buf);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
-				// since we can catch permission error here, read/write permissions of files are not explicitly stored
+				// since we can catch permission error here, r/w permissions of files are not explicitly stored
 				if (e instanceof IOException)
 					return Errors.EBADF;
 				return EIO;
@@ -196,6 +235,7 @@ class Proxy {
 			raf = fd_raf.get(fd);
 
 			try {
+				// should be nothing different
 				read_len = raf.read(buf);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
@@ -248,6 +288,7 @@ class Proxy {
 				if (seek_loc < 0)
 					return Errors.EINVAL;
 	
+				// should be nothing different
 				raf.seek(seek_loc);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
@@ -270,6 +311,7 @@ class Proxy {
 			File f;
 			System.out.println("--[UNLINK] called from " + path);
 			
+			// TODO: delete in server?
 			f = new File(path);
 			if (!f.exists())
 				return Errors.ENOENT;
@@ -302,24 +344,30 @@ class Proxy {
 	}
 
 	public static void main(String[] args) throws IOException {
+		// check args number
+        if(args.length != 4) {
+            System.out.println("Usage: java Proxy serverip port cachedir cachesize");
+            System.exit(0);
+        }
+
 		// These are args to connect to the server
-		int port, cachesize;
-		String serverip, cachedir;
+		int port, ca_size;
+		String serverip, ca_dir;
 		serverip = args[0];
-		cachedir = args[2];
+		ca_dir = args[2];
 		try {
 			port = Integer.parseInt(args[1]);
-			cachesize = Integer.parseInt(args[3]);
+			ca_size = Integer.parseInt(args[3]);
 		} catch (NumberFormatException e)
 		{
 			System.out.println("NumberFormatException in parsing args. \n");
 			port = 15440;
-			cachesize = 100000;
+			ca_size = 100000;
 		}
 		System.out.println("Server ip: " + serverip + "\nServer port: " + port);
-		System.out.println("cachedir: " + cachedir + "\ncachesize: " + cachesize);
+		System.out.println("cachedir: " + ca_dir + "\ncachesize: " + ca_size);
 
-		init();
+		init(ca_dir, ca_size);
 		System.out.println("Proxy initialized.");
 
 		// connect to server
