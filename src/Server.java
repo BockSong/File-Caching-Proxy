@@ -30,26 +30,31 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     // client call this to download file
     public FileInfo getFile( String path )
             throws RemoteException {
-        FileInfo f = new FileInfo();
+        FileInfo fi;
         String remotePath = getRemotepath(path);
-        f.path = path;
         System.out.println("[getFile] remotePath: " + remotePath);
 
-        try {
-            File file = new File(remotePath);
-            byte buffer[] = new byte[(int) file.length()];
-            BufferedInputStream input = new
-            BufferedInputStream(new FileInputStream(remotePath));
-            input.read(buffer, 0, buffer.length);
-            input.close();
-            f.filedata = buffer;
-
-        } catch(Exception e) {
-            System.out.println("Error in getFile: " + e.getMessage());
-            e.printStackTrace();
-            f.filedata = null;
+        File file = new File(remotePath);
+        if (!file.exists() || !file.isFile()) {
+            System.out.println("this file does not exist. " + remotePath);
+            fi = new FileInfo(path);
         }
-        return f;
+        else {
+            byte buffer[] = new byte[(int) file.length()];
+            try {
+                BufferedInputStream input = new
+                BufferedInputStream(new FileInputStream(remotePath));
+                input.read(buffer, 0, buffer.length);
+                input.close();
+    
+            } catch(Exception e) {
+                System.out.println("Error in getFile: " + e.getMessage());
+                e.printStackTrace();
+            }
+            fi = new FileInfo(path, buffer);
+        }
+
+        return fi;
     }
 
     // client call this to upload file
@@ -61,7 +66,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             System.out.println("[setFile] remotePath: " + remotePath);
     
             File file = new File(remotePath);
-            BufferedOutputStream output = new BufferedOutputStream(new FileOutputStream(remotePath));
+            BufferedOutputStream output = new
+            BufferedOutputStream(new FileOutputStream(remotePath));
             output.write(f_data, 0, f_data.length);
             output.flush();
             output.close();

@@ -62,22 +62,21 @@ class Proxy {
 				return Errors.EMFILE;
 
 			f = new File(localPath);
+			System.out.println("downloading of path: " + path);
 			// TODO: currently always download the file rather than check on use first
 			try {
-				// TODO: currently only consider the case when the file exists remotely
-				FileInfo fi = new FileInfo();
-				System.out.println("downloading of path: " + path);
-				fi = server.getFile(path);
-
-				// save the file locally
-				byte[] fi_data = fi.filedata;
-				File file = new File(localPath);
-				BufferedOutputStream output = new BufferedOutputStream(new FileOutputStream(localPath));
-				output.write(fi_data, 0, fi_data.length);
-				output.flush();
-				output.close();
+				FileInfo fi = server.getFile(path);
+				// if the file exists, write it to local cache
+				if (fi.exist) {
+					byte[] fi_data = fi.filedata;
+					BufferedOutputStream output = new 
+					BufferedOutputStream(new FileOutputStream(localPath));
+					output.write(fi_data, 0, fi_data.length);
+					output.flush();
+					output.close();
+				}
 			} catch (Exception e) {
-				System.out.println("Error in open: " + e.getMessage());
+				System.out.println("Error in downloading: " + e.getMessage());
 				e.printStackTrace();
 			}
 
