@@ -66,14 +66,25 @@ class Proxy {
 			// TODO: currently always download the file rather than check on use first
 			try {
 				FileInfo fi = server.getFile(path);
-				// if the file exists, write it to local cache
 				if (fi.exist) {
-					byte[] fi_data = fi.filedata;
-					BufferedOutputStream output = new 
-					BufferedOutputStream(new FileOutputStream(localPath));
-					output.write(fi_data, 0, fi_data.length);
-					output.flush();
-					output.close();
+					if (fi.isFile) {
+						// if it's a file, write it to local cache
+						byte[] fi_data = fi.filedata;
+						BufferedOutputStream output = new 
+						BufferedOutputStream(new FileOutputStream(localPath));
+						output.write(fi_data, 0, fi_data.length);
+						output.flush();
+						output.close();
+					}
+					else {
+						// if it's a directory, make this new directory
+						if (!f.mkdirs()) {
+							System.out.println("Error: unable to make new directory in cache!");
+						};
+					}
+				}
+				else {
+					System.out.println("this directory does not exist remotely.");
 				}
 			} catch (Exception e) {
 				System.out.println("Error in downloading: " + e.getMessage());
@@ -158,16 +169,16 @@ class Proxy {
 					raf.close();
 					
 					// use RPC call to upload a file from cache
-					FileInfo fi = new FileInfo();
-					fi.path = get_oriPath(f.getPath());
-					System.out.println("uploading of oriPath: " + fi.path);
+					String oriPath = get_oriPath(f.getPath());
+					System.out.println("uploading of oriPath: " + oriPath);
 
 					byte buffer[] = new byte[(int) f.length()];
-					BufferedInputStream input = new BufferedInputStream(new FileInputStream(f.getPath()));
+					BufferedInputStream input = new 
+					BufferedInputStream(new FileInputStream(f.getPath()));
 					input.read(buffer, 0, buffer.length);
 					input.close();
-					fi.filedata = buffer;
 
+					FileInfo fi = new FileInfo(oriPath, buffer);
 					server.setFile(fi);
 
 					fd_raf.remove(fd);

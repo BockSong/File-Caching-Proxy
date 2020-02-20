@@ -35,9 +35,13 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
         System.out.println("[getFile] remotePath: " + remotePath);
 
         File file = new File(remotePath);
-        if (!file.exists() || !file.isFile()) {
-            System.out.println("this file does not exist. " + remotePath);
-            fi = new FileInfo(path);
+        if (!file.exists()) {
+            System.out.println("        this Dir does not exist. ");
+            fi = new FileInfo(false, path);
+        }
+        else if (!file.isFile()) {
+            System.out.println("        this is a directory. ");
+            fi = new FileInfo(true, path);
         }
         else {
             byte buffer[] = new byte[(int) file.length()];
@@ -52,6 +56,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
                 e.printStackTrace();
             }
             fi = new FileInfo(path, buffer);
+            System.out.println("        file compressed successfully. ");
         }
 
         return fi;
@@ -71,6 +76,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             output.write(f_data, 0, f_data.length);
             output.flush();
             output.close();
+            System.out.println("        file loaded successfully. ");
             
         } catch (Exception e) {
             System.out.println("Error in setFile: " + e.getMessage());
