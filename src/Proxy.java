@@ -12,11 +12,17 @@ class Proxy {
 
 	public static final int EIO = -5;
 	// Note: need to add synchronized for func, in this way don't need to use lock (synchronized method)
-	private static List<Integer> avail_fds = Collections.synchronizedList(new ArrayList<Integer>());
-	// here is a compelte record of fd (and the corresponding file)
-	private static ConcurrentHashMap<Integer, File> fd_f = new ConcurrentHashMap<Integer, File>();
+	private static List<Integer> avail_fds = 
+								Collections.synchronizedList(new ArrayList<Integer>());
+	// compelte record of used fd and corresponding <file>
+	private static ConcurrentHashMap<Integer, File> fd_f = new 
+								ConcurrentHashMap<Integer, File>();
 	// may try synchronizedmap if this one is not good enough
-	private static ConcurrentHashMap<Integer, RandomAccessFile> fd_raf = new ConcurrentHashMap<Integer, RandomAccessFile>();
+	private static ConcurrentHashMap<Integer, RandomAccessFile> fd_raf = new 
+								ConcurrentHashMap<Integer, RandomAccessFile>();
+
+    private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
+                                ConcurrentHashMap<String, Integer>();
 
 	private static int cachesize;
 	private static String cachedir;
@@ -49,10 +55,11 @@ class Proxy {
 		 * It returns -1 on failure, and sets errno to indicate the error.
 		 */
 		public int open( String path, OpenOption o ) {
-			int fd;
+			int fd, remote_verID;
 			File f;
 			String mode, localPath;
 			RandomAccessFile raf;
+			Boolean update;
 			
 			localPath = get_localPath(path);
 			System.out.println("--[OPEN] called from localPath: " + localPath);
@@ -61,35 +68,61 @@ class Proxy {
 				return Errors.EMFILE;
 
 			f = new File(localPath);
-			System.out.println("downloading of path: " + path);
-			// TODO: currently always download the file rather than check on use first
+			
 			try {
-				FileInfo fi = server.getFile(path);
-				if (fi.exist) {
-					if (fi.isFile) {
-						// if it's a file, write it to local cache
-						byte[] fi_data = fi.filedata;
-						BufferedOutputStream output = new 
-						BufferedOutputStream(new FileOutputStream(localPath));
-						output.write(fi_data, 0, fi_data.length);
-						output.flush();
-						output.close();
+				remote_verID = server.getVersionID(path);
+
+				// check if we need to update cache
+				if (remote_verID == -1) {
+					System.out.println("remote_verID == -1");
+					update = false;  // if server doesn't have this file, don't update
+				}
+				else if (f.exists() && f.isFile() && (remote_verID <= oriPath_verID.get(path)) ) {
+					System.out.println("we have this file and it's the newest");
+					update = false;  // if we have this file and it's the newest, don't update
+				}
+				else {
+					update = true;  // otherwise update
+				}
+
+				if (update) {
+					System.out.println("downloading of path: " + path);
+					FileInfo fi = server.getFile(path);
+					if (fi.exist) {
+						if (fi.isFile) {
+							// if it's a file, write it to local cache
+							byte[] fi_data = fi.filedata;
+							BufferedOutputStream output = new 
+							BufferedOutputStream(new FileOutputStream(localPath));
+							output.write(fi_data, 0, fi_data.length);
+							output.flush();
+							output.close();
+
+							// add the new file pair into hashmap once it's created
+							// Q: what if there multiple clients trying to add pairs?
+							// It should be fine, just written multiple times and last win!
+							oriPath_verID.put(path, remote_verID);
+						}
+						else {
+							// if it's a directory, make this new directory
+							if (!f.mkdirs()) {
+								System.out.println("Error: unable to make new directory in cache!");
+							};
+						}
 					}
 					else {
-						// if it's a directory, make this new directory
-						if (!f.mkdirs()) {
-							System.out.println("Error: unable to make new directory in cache!");
-						};
+						System.out.println("this directory does not exist remotely.");
 					}
 				}
 				else {
-					System.out.println("this directory does not exist remotely.");
+					System.out.println("Local file is already up-to-date. ");
 				}
 			} catch (Exception e) {
 				System.out.println("Error in downloading: " + e.getMessage());
 				e.printStackTrace();
 			}
 
+			// now start deal with local cache
 			switch (o) {
 				case READ:
 					// must exist
@@ -155,36 +188,46 @@ class Proxy {
 		 */
 		public int close( int fd ) {
 			File f;
+			int local_verID, remote_verID;
+			String oriPath;
 			RandomAccessFile raf;
 			System.out.println("--[CLOSE] called from " + fd);
 			if (!fd_raf.containsKey(fd))
 				return Errors.EBADF;
 
 			f = fd_f.get(fd);
-			
-			if (!f.isDirectory()) {
-				try {
-					raf = fd_raf.get(fd);
-					raf.close();
-					
-					// use RPC call to upload a file from cache
-					String oriPath = get_oriPath(f.getPath());
-					System.out.println("uploading of oriPath: " + oriPath);
+			oriPath = get_oriPath(f.getPath());
+			local_verID = oriPath_verID.get(oriPath);
 
-					byte buffer[] = new byte[(int) f.length()];
-					BufferedInputStream input = new 
-					BufferedInputStream(new FileInputStream(f.getPath()));
-					input.read(buffer, 0, buffer.length);
-					input.close();
+			try {
+				remote_verID = server.getVersionID(oriPath);
+				
+				// if f is a file and it's newer than server, then upload it to server
+				if (!f.isDirectory() && (local_verID > remote_verID)) {
+						raf = fd_raf.get(fd);
+						raf.close();
+						
+						// use RPC call to upload a file from cache
+						System.out.println("Local verID: " + local_verID + " (" + remote_verID + ")");
+						System.out.println("uploading of oriPath: " + oriPath);
 
-					FileInfo fi = new FileInfo(oriPath, buffer);
-					server.setFile(fi);
+						byte buffer[] = new byte[(int) f.length()];
+						BufferedInputStream input = new 
+						BufferedInputStream(new FileInputStream(f.getPath()));
+						input.read(buffer, 0, buffer.length);
+						input.close();
 
-					fd_raf.remove(fd);
-				} catch (Exception e) {
-					System.out.println("throw IO exception");
-					return EIO;
+						FileInfo fi = new FileInfo(oriPath, buffer, local_verID);
+						server.setFile(fi);
+
+						fd_raf.remove(fd);
 				}
+				else {
+					System.out.println("Local file didn't change. ");
+				}
+			} catch (Exception e) {
+				System.out.println("Error in uploading: " + e.getMessage());
+				e.printStackTrace();
 			}
 
 			fd_f.remove(fd);
@@ -226,6 +269,13 @@ class Proxy {
 				if (e instanceof IOException)
 					return Errors.EBADF;
 				return EIO;
+			}
+
+			System.out.println("Here is your path: " + f.getPath());
+			System.out.println("Here is your name: " + f.getName());
+			// update versionID
+			synchronized (oriPath_verID) {
+				oriPath_verID.put(f.getPath(), oriPath_verID.get(f.getPath()) + 1);
 			}
 
 			System.out.println("Write " + buf.length + " byte: " + buf);

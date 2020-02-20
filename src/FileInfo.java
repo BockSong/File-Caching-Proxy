@@ -17,12 +17,14 @@ public class FileInfo implements Serializable {
         this.isFile = false;
         this.path = path;
         this.filedata = null;
+        this.versionID = -1;
     }
 
-    public FileInfo( String path, byte[] filedata ) {
+    public FileInfo( String path, byte[] filedata, int versionID ) {
         this.exist = true;
         this.isFile = true;
         this.path = path;
         this.filedata = filedata;
+        this.versionID = versionID;
     }
 }

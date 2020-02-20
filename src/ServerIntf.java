@@ -13,4 +13,8 @@ public interface ServerIntf extends Remote {
 
              public void setFile( FileInfo f )
                            throws RemoteException;
+
+             public int getVersionID( String path )
+                           throws RemoteException;
+                           
 }

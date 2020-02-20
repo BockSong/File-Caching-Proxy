@@ -17,6 +17,8 @@ import java.rmi.Naming;
 public class Server extends UnicastRemoteObject implements ServerIntf {
     // directory tree populated with the initial files and subdirectories to serve.
     private static String rootdir;
+    private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
+                                ConcurrentHashMap<String, Integer>();
 
     public Server() throws RemoteException {
            super(0);
@@ -25,6 +27,20 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     private String getRemotepath( String path ) {
         // TODO: need to deal with corner case of path format
         return rootdir + "/" + path;
+    }
+
+    /*
+     * getVersionID
+     * This function returns the versionID of file at path. 
+     * If it doesn't exist, return -1;?????????????
+     * If it hasn't been requested, return -2;
+     */
+    // TODO: may need synchronized key work here
+    public int getVersionID( String path ) {
+        if (oriPath_verID.containsKey(path))
+            return oriPath_verID.get(path);
+        else
+            return -2;
     }
 
     // client call this to download file
@@ -36,6 +52,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
         File file = new File(remotePath);
         if (!file.exists()) {
+            // TODO: This branch should be eliminated now
             System.out.println("        this Dir does not exist. ");
             fi = new FileInfo(false, path);
         }
@@ -55,7 +72,13 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
                 System.out.println("Error in getFile: " + e.getMessage());
                 e.printStackTrace();
             }
-            fi = new FileInfo(path, buffer);
+            // for the first time a client requested
+            if (!oriPath_verID.containsKey(path)) {
+                synchronized (oriPath_verID) {
+                    oriPath_verID.put(path, 0);
+                }
+            }
+            fi = new FileInfo(path, buffer, oriPath_verID.get(path));
             System.out.println("        file compressed successfully. ");
         }
 
@@ -63,20 +86,25 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     }
 
     // client call this to upload file
-    public void setFile( FileInfo f )
+    public void setFile( FileInfo fi )
             throws RemoteException {
         try {
-            String remotePath = getRemotepath(f.path);
-            byte[] f_data = f.filedata;
+            String remotePath = getRemotepath(fi.path);
+            byte[] fi_data = fi.filedata;
             System.out.println("[setFile] remotePath: " + remotePath);
     
             File file = new File(remotePath);
             BufferedOutputStream output = new
             BufferedOutputStream(new FileOutputStream(remotePath));
-            output.write(f_data, 0, f_data.length);
+            output.write(fi_data, 0, fi_data.length);
             output.flush();
             output.close();
             System.out.println("        file loaded successfully. ");
+
+			// update versionID once received the file
+			synchronized (oriPath_verID) {
+				oriPath_verID.put(fi.path, fi.versionID);
+			}
             
         } catch (Exception e) {
             System.out.println("Error in setFile: " + e.getMessage());
