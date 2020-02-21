@@ -71,14 +71,20 @@ class Proxy {
 			
 			try {
 				remote_verID = server.getVersionID(path);
+				if (f.exists() && f.isFile()) {
+					System.out.println("local_verID: " + oriPath_verID.get(path) + " remote_verID: " + remote_verID);
+				}
+				else
+					System.out.println("remote_verID: " + remote_verID);
 
 				// check if we need to update cache
 				if (remote_verID == -1) {
+					// TODO: currently this don't work. Is handled below
+					// may change to this way for potential optimation
 					System.out.println("remote_verID == -1");
 					update = false;  // if server doesn't have this file, don't update
 				}
 				else if (f.exists() && f.isFile() && (remote_verID <= oriPath_verID.get(path)) ) {
-					System.out.println("we have this file and it's the newest");
 					update = false;  // if we have this file and it's the newest, don't update
 				}
 				else {
@@ -98,7 +104,7 @@ class Proxy {
 							output.flush();
 							output.close();
 
-							// add the new file pair into hashmap once it's created
+							// update the file-verID pair
 							// Q: what if there multiple clients trying to add pairs?
 							// It should be fine, just written multiple times and last win!
 							oriPath_verID.put(path, remote_verID);
@@ -166,8 +172,11 @@ class Proxy {
 			if (!f.isDirectory()) {
 				try {
 					raf = new RandomAccessFile(localPath, mode);
-
 					fd_raf.put(fd, raf);
+
+					// add the pair if the file is just created
+					if (!oriPath_verID.containsKey(path))
+						oriPath_verID.put(path, 0);
 				} catch (Exception e) {
 					System.out.println("throw IOException");
 					return EIO;
@@ -249,6 +258,7 @@ class Proxy {
 		 */  
 		public long write( int fd, byte[] buf ) {
 			File f;
+			String oriPath;
 			RandomAccessFile raf;
 			System.out.println("--[WRITE] called from " + fd);
 			if (!fd_f.containsKey(fd))
@@ -265,18 +275,19 @@ class Proxy {
 				raf.write(buf);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
-				// since we can catch permission error here, r/w permissions of files are not explicitly stored
+				// since we can catch permission error here, 
+				// r/w permissions of files are not explicitly stored
 				if (e instanceof IOException)
 					return Errors.EBADF;
 				return EIO;
 			}
 
-			System.out.println("Here is your path: " + f.getPath());
-			System.out.println("Here is your name: " + f.getName());
+			oriPath = get_oriPath(f.getPath());
 			// update versionID
 			synchronized (oriPath_verID) {
-				oriPath_verID.put(f.getPath(), oriPath_verID.get(f.getPath()) + 1);
+				oriPath_verID.put(oriPath, oriPath_verID.get(oriPath) + 1);
 			}
+			System.out.println("file " + oriPath + "'s verID update to " + oriPath_verID.get(oriPath));
 
 			System.out.println("Write " + buf.length + " byte: " + buf);
 			System.out.println(" ");

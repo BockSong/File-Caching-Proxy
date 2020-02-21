@@ -32,15 +32,19 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     /*
      * getVersionID
      * This function returns the versionID of file at path. 
-     * If it doesn't exist, return -1;?????????????
-     * If it hasn't been requested, return -2;
+     * If it hasn't been requested, return 0;
+     * If it doesn't exist, return -1
      */
     // TODO: may need synchronized key work here
     public int getVersionID( String path ) {
-        if (oriPath_verID.containsKey(path))
+        if (oriPath_verID.containsKey(path)) {
+            System.out.println("---" + path + " is in hashmap: " + oriPath_verID.get(path));
             return oriPath_verID.get(path);
-        else
-            return -2;
+        }
+        else {
+            System.out.println("---" + path + " hasn't been requested or doesn't exists. ");
+            return 0;
+        }
     }
 
     // client call this to download file
@@ -74,12 +78,11 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             }
             // for the first time a client requested
             if (!oriPath_verID.containsKey(path)) {
-                synchronized (oriPath_verID) {
-                    oriPath_verID.put(path, 0);
-                }
+                oriPath_verID.put(path, 0);
             }
             fi = new FileInfo(path, buffer, oriPath_verID.get(path));
-            System.out.println("        file compressed successfully. ");
+            System.out.println("        file compressed successfully with ID "
+                                                     + oriPath_verID.get(path));
         }
 
         return fi;
@@ -99,13 +102,11 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             output.write(fi_data, 0, fi_data.length);
             output.flush();
             output.close();
-            System.out.println("        file loaded successfully. ");
 
 			// update versionID once received the file
-			synchronized (oriPath_verID) {
-				oriPath_verID.put(fi.path, fi.versionID);
-			}
-            
+            oriPath_verID.put(fi.path, fi.versionID);
+            System.out.println("        file loaded successfully with ID "
+                                                        + fi.versionID);
         } catch (Exception e) {
             System.out.println("Error in setFile: " + e.getMessage());
             e.printStackTrace();
