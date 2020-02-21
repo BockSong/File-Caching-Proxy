@@ -54,7 +54,7 @@ class Proxy {
 		 * return: If successful, open() returns a non-negative integer, termed a file descriptor.
 		 * It returns -1 on failure, and sets errno to indicate the error.
 		 */
-		public int open( String path, OpenOption o ) {
+		public synchronized int open( String path, OpenOption o ) {
 			int fd, remote_verID;
 			File f;
 			String mode, localPath;
@@ -79,9 +79,6 @@ class Proxy {
 
 				// check if we need to update cache
 				if (remote_verID == -1) {
-					// TODO: currently this don't work. Is handled below
-					// may change to this way for potential optimation
-					System.out.println("remote_verID == -1");
 					update = false;  // if server doesn't have this file, don't update
 				}
 				else if (f.exists() && f.isFile() && (remote_verID <= oriPath_verID.get(path)) ) {
@@ -94,15 +91,16 @@ class Proxy {
 				if (update) {
 					System.out.println("downloading of path: " + path);
 					FileInfo fi = server.getFile(path);
+					// In case somethig wrong; non-exist file shouldn't be transmitted
 					if (fi.exist) {
 						if (fi.isFile) {
 							// if it's a file, write it to local cache
 							byte[] fi_data = fi.filedata;
-							BufferedOutputStream output = new 
+							BufferedOutputStream writer = new 
 							BufferedOutputStream(new FileOutputStream(localPath));
-							output.write(fi_data, 0, fi_data.length);
-							output.flush();
-							output.close();
+							writer.write(fi_data, 0, fi_data.length);
+							writer.flush();
+							writer.close();
 
 							// update the file-verID pair
 							// Q: what if there multiple clients trying to add pairs?
@@ -117,7 +115,7 @@ class Proxy {
 						}
 					}
 					else {
-						System.out.println("this directory does not exist remotely.");
+						System.out.println("[Error] this directory does not exist remotely.");
 					}
 				}
 				else {
@@ -162,10 +160,10 @@ class Proxy {
 					return Errors.EINVAL;
 			}
 
-			synchronized (avail_fds) {
-				fd = avail_fds.get(0);
-				avail_fds.remove(0);
-			}
+			// Mark: move synchronized keyword to function
+			fd = avail_fds.get(0);
+			avail_fds.remove(0);
+
 			fd_f.put(fd, f);
 
 			// Cannot actually open a directory using RandomAccessFile
@@ -195,7 +193,7 @@ class Proxy {
      	 * -1 is returned and the global integer variable errno is set to indicate the
 		 * error.
 		 */
-		public int close( int fd ) {
+		public synchronized int close( int fd ) {
 			File f;
 			int local_verID, remote_verID;
 			String oriPath;
@@ -221,10 +219,10 @@ class Proxy {
 						System.out.println("uploading of oriPath: " + oriPath);
 
 						byte buffer[] = new byte[(int) f.length()];
-						BufferedInputStream input = new 
+						BufferedInputStream reader = new 
 						BufferedInputStream(new FileInputStream(f.getPath()));
-						input.read(buffer, 0, buffer.length);
-						input.close();
+						reader.read(buffer, 0, buffer.length);
+						reader.close();
 
 						FileInfo fi = new FileInfo(oriPath, buffer, local_verID);
 						server.setFile(fi);
@@ -240,9 +238,9 @@ class Proxy {
 			}
 
 			fd_f.remove(fd);
-			synchronized (avail_fds) {
-				avail_fds.add(fd);
-			}
+
+			// Mark: move synchronized keyword to function
+			avail_fds.add(fd);
 
 			System.out.println(" ");
 			return 0;
@@ -256,7 +254,7 @@ class Proxy {
      	 * Otherwise, a -1 is returned and the global variable errno is set to indicate
 		 * the error.
 		 */  
-		public long write( int fd, byte[] buf ) {
+		public synchronized long write( int fd, byte[] buf ) {
 			File f;
 			String oriPath;
 			RandomAccessFile raf;
@@ -284,9 +282,9 @@ class Proxy {
 
 			oriPath = get_oriPath(f.getPath());
 			// update versionID
-			synchronized (oriPath_verID) {
-				oriPath_verID.put(oriPath, oriPath_verID.get(oriPath) + 1);
-			}
+			// Mark: move synchronized keyword to function
+			oriPath_verID.put(oriPath, oriPath_verID.get(oriPath) + 1);
+				
 			System.out.println("file " + oriPath + "'s verID update to " + oriPath_verID.get(oriPath));
 
 			System.out.println("Write " + buf.length + " byte: " + buf);
@@ -302,7 +300,7 @@ class Proxy {
      	 * end-of-file, zero is returned.  Otherwise, a -1 is returned and the global
 		 * variable errno is set to indicate the error. 
 		 */ 
-		public long read( int fd, byte[] buf ) {
+		public synchronized long read( int fd, byte[] buf ) {
 			File f;
 			int read_len;
 			RandomAccessFile raf;
@@ -339,7 +337,7 @@ class Proxy {
      	 * measured in bytes from the beginning of the file.  Otherwise, a value of -1 is
 		 * returned and errno is set to indicate the error.
 		 */
-		public long lseek( int fd, long pos, LseekOption o ) {
+		public synchronized long lseek( int fd, long pos, LseekOption o ) {
 			File f;
 			long seek_loc = pos;
 			RandomAccessFile raf;
@@ -389,7 +387,7 @@ class Proxy {
 		 * return: Upon successful completion, a value of 0 is returned.  Otherwise, a value of
 		 * -1 is returned and errno is set to indicate the error.
 		 */
-		public int unlink( String path ) {
+		public synchronized int unlink( String path ) {
 			File f;
 			System.out.println("--[UNLINK] called from " + path);
 			

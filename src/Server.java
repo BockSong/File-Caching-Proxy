@@ -25,7 +25,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     }
 
     private String getRemotepath( String path ) {
-        // TODO: need to deal with corner case of path format
+        // TODO: need to deal with corner case of path format in ck3
         return rootdir + "/" + path;
     }
 
@@ -35,20 +35,24 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
      * If it hasn't been requested, return 0;
      * If it doesn't exist, return -1
      */
-    // TODO: may need synchronized key work here
-    public int getVersionID( String path ) {
+    public synchronized int getVersionID( String path ) {
+        File file = new File(getRemotepath(path));
+        if (!file.exists()) {
+            System.out.println("---" + path + " doesn't exists. ");
+            return -1;
+        }
         if (oriPath_verID.containsKey(path)) {
             System.out.println("---" + path + " is in hashmap: " + oriPath_verID.get(path));
             return oriPath_verID.get(path);
         }
         else {
-            System.out.println("---" + path + " hasn't been requested or doesn't exists. ");
+            System.out.println("---" + path + " hasn't been requested. ");
             return 0;
         }
     }
 
     // client call this to download file
-    public FileInfo getFile( String path )
+    public synchronized FileInfo getFile( String path )
             throws RemoteException {
         FileInfo fi;
         String remotePath = getRemotepath(path);
@@ -56,8 +60,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
         File file = new File(remotePath);
         if (!file.exists()) {
-            // TODO: This branch should be eliminated now
-            System.out.println("        this Dir does not exist. ");
+            // This branch shouldn't be executed until an error happens
+            System.out.println("[Error] this Dir does not exist. ");
             fi = new FileInfo(false, path);
         }
         else if (!file.isFile()) {
@@ -67,10 +71,10 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
         else {
             byte buffer[] = new byte[(int) file.length()];
             try {
-                BufferedInputStream input = new
+                BufferedInputStream reader = new
                 BufferedInputStream(new FileInputStream(remotePath));
-                input.read(buffer, 0, buffer.length);
-                input.close();
+                reader.read(buffer, 0, buffer.length);
+                reader.close();
     
             } catch(Exception e) {
                 System.out.println("Error in getFile: " + e.getMessage());
@@ -89,7 +93,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     }
 
     // client call this to upload file
-    public void setFile( FileInfo fi )
+    public synchronized void setFile( FileInfo fi )
             throws RemoteException {
         try {
             String remotePath = getRemotepath(fi.path);
@@ -97,11 +101,11 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             System.out.println("[setFile] remotePath: " + remotePath);
     
             File file = new File(remotePath);
-            BufferedOutputStream output = new
+            BufferedOutputStream writer = new
             BufferedOutputStream(new FileOutputStream(remotePath));
-            output.write(fi_data, 0, fi_data.length);
-            output.flush();
-            output.close();
+            writer.write(fi_data, 0, fi_data.length);
+            writer.flush();
+            writer.close();
 
 			// update versionID once received the file
             oriPath_verID.put(fi.path, fi.versionID);

@@ -5,7 +5,7 @@ import java.io.*;
 // indicates object that can be copied remotely
 public class FileInfo implements Serializable {
     public String path;
-    public Boolean exist;
+    public Boolean exist; // in case sth wrong
     public Boolean isFile;
     public int versionID;
     public byte[] filedata;
