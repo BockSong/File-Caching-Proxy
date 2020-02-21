@@ -110,8 +110,8 @@ class Proxy {
 							oriPath_verID.put(path, remote_verID);
 						}
 						else {
-							// if it's a directory, make this new directory
-							if (!f.mkdirs()) {
+							// if it's a directory and doesn't exist locally, make it
+							if (!f.exists() && !f.mkdirs()) {
 								System.out.println("Error: unable to make new directory in cache!");
 							};
 						}
