@@ -1,7 +1,7 @@
 all: Proxy.class Server.class
 
 %.class: %.java
-	javac $<
+	javac -target 8 -source 8 -encoding ascii $<
 
 clean:
 	rm -f *.class

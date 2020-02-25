@@ -17,4 +17,7 @@ public interface ServerIntf extends Remote {
              public int getVersionID( String path )
                            throws RemoteException;
                            
+             public int unlink( String path )
+                           throws RemoteException;
+
 }

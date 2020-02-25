@@ -16,6 +16,8 @@ import java.rmi.Naming;
 // Server object definition
 public class Server extends UnicastRemoteObject implements ServerIntf {
     // directory tree populated with the initial files and subdirectories to serve.
+	public static final int ENOENT = -2;
+	public static final int EISDIR = -21;
     private static String rootdir;
     private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
                                 ConcurrentHashMap<String, Integer>();
@@ -115,6 +117,31 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             System.out.println("Error in setFile: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    // client call this to unlink a file
+    public synchronized int unlink( String path )
+            throws RemoteException {
+        try {
+            String remotePath = getRemotepath(path);
+            System.out.println("[unlink] remotePath: " + remotePath);
+    
+            File file = new File(remotePath);
+			if (!file.exists())
+				return ENOENT;
+			if (file.isDirectory())
+				return EISDIR;
+
+			file.delete();
+            
+			// delete its pair in hashmap
+            oriPath_verID.remove(path);
+            System.out.println("        file unlinked.");
+        } catch (Exception e) {
+            System.out.println("Error in setFile: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return 0;
     }
 
 	public static void main(String[] args) throws IOException {

@@ -1,4 +1,4 @@
-/* Sample skeleton for proxy */
+/* proxy.java */
 
 import java.io.*;
 import java.rmi.Naming;
@@ -269,7 +269,7 @@ class Proxy {
 			raf = fd_raf.get(fd);
 
 			try {
-				// should be nothing different
+				// just local execution
 				raf.write(buf);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
@@ -315,7 +315,7 @@ class Proxy {
 			raf = fd_raf.get(fd);
 
 			try {
-				// should be nothing different
+				// just local execution
 				read_len = raf.read(buf);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
@@ -368,7 +368,7 @@ class Proxy {
 				if (seek_loc < 0)
 					return Errors.EINVAL;
 	
-				// should be nothing different
+				// just local execution
 				raf.seek(seek_loc);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
@@ -388,25 +388,21 @@ class Proxy {
 		 * -1 is returned and errno is set to indicate the error.
 		 */
 		public synchronized int unlink( String path ) {
+			int rv = -1;
 			File f;
 			System.out.println("--[UNLINK] called from " + path);
 			
-			// TODO: delete in server?
-			f = new File(path);
-			if (!f.exists())
-				return Errors.ENOENT;
-			if (f.isDirectory())
-				return Errors.EISDIR;
-
 			try {
-				f.delete();
+				// delete the file from server
+				rv = server.unlink(path);
+				// TODO: already opened file need to still could use them
+				// in this case do we still remove rv's record in proxy? do we have to? if so, when?		
 			} catch (Exception e) {
-				System.out.println("throw IO exception");
-				return EIO;
+				System.out.println("Error in unlink: " + e.getMessage());
+				e.printStackTrace();
 			}
-
 			System.out.println(" ");
-			return 0;
+			return rv;
 		}
 
 		public void clientdone() {
