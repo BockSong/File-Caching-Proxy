@@ -11,6 +11,8 @@ import java.util.concurrent.*;
 class Proxy {
 
 	public static final int EIO = -5;
+
+	private static final String cache_split = "__cache/";
 	// Note: need to add synchronized for func, in this way don't need to use lock (synchronized method)
 	private static List<Integer> avail_fds = 
 								Collections.synchronizedList(new ArrayList<Integer>());
@@ -44,6 +46,94 @@ class Proxy {
 
 	private static String get_oriPath( String path ) {
 		return path.substring(cachedir.length() + 1);
+	}
+
+	/*
+	 * copy_file: copy the file from srcPath to desPath.
+	 */
+	private static void copy_file( String srcPath, String desPath ) {
+		try {
+			File srcFile = new File(srcPath);
+			byte buffer[] = new byte[(int) srcFile.length()];
+			BufferedInputStream reader = new
+			BufferedInputStream(new FileInputStream(srcPath));
+			reader.read(buffer, 0, buffer.length);
+			reader.close();
+
+			BufferedOutputStream writer = new
+			BufferedOutputStream(new FileOutputStream(desPath));
+			writer.write(buffer, 0, buffer.length);
+			writer.flush();
+			writer.close();
+		} catch (Exception e) {
+			System.out.println("Error in copy_file: " + e.getMessage());
+			e.printStackTrace();
+		}
+	}
+
+	/*
+	 * make_copy: make a copy of file corresponed with fd and redirect fd to the new file.
+	 */
+	private static void make_copy( int fd ) {
+		File oriFile = fd_f.get(fd), copyFile;
+		String oriPath = oriFile.getPath();
+		String copyPath, fileName; 
+
+		fileName = oriFile.getName();
+		File copyDir = new File(oriPath + cache_split);
+		// if it doesn't exist, create this directory
+		if ( !copyDir.exists() && !copyDir.mkdirs() ) {
+			System.out.println("Error: unable to make new directory in cache!");
+		};
+
+		// find an available copyPath
+		for (int i = 0; ; i++) {
+			copyPath = oriPath + cache_split + fileName + "_" + i;
+			copyFile = new File(copyPath);
+			if (!copyFile.exists()) {
+				System.out.println("[make_copy] stored at: " + copyPath);
+				break;
+			}
+		}
+
+		// copy the file
+		copy_file(oriPath, copyPath);
+
+		// redirect fd to that new copy
+		fd_f.remove(fd);
+		fd_f.put(fd, copyFile);
+		
+		// TODO: add it in cache counting
+	}
+
+	/*
+	 * remove_copy: overwrite the original file with the copied version, and remove the 
+	 * 				copied version.
+	 */
+	private static void remove_copy( int fd ) {
+		try {
+			File copyFile = fd_f.get(fd);
+			String copyPath = copyFile.getPath();
+
+			// find the original file
+			String oriPath = copyPath.substring(0, copyPath.lastIndexOf(cache_split)
+															- cache_split.length());
+			System.out.println("[remove_copy] copyPath: " + copyPath);
+			System.out.println("[remove_copy] oriPath: " + oriPath);
+
+			// overwrite the original file with the copy
+			copy_file(copyPath, oriPath);
+
+			// remove that copy
+			if (!copyFile.delete()) {
+				System.out.println("Error: delete file failed from " + oriPath);
+			}
+		} catch (Exception e) {
+            System.out.println("Error in remove: " + e.getMessage());
+            e.printStackTrace();
+		}
+
+		// TODO: clear it in cache counting
 	}
 
 	private static class FileHandler implements FileHandling {
@@ -166,6 +256,10 @@ class Proxy {
 
 			fd_f.put(fd, f);
 
+			// if it's a write, make a copy first
+			if (mode == "rw")
+				make_copy(fd);
+
 			// Cannot actually open a directory using RandomAccessFile
 			if (!f.isDirectory()) {
 				try {
@@ -203,10 +297,15 @@ class Proxy {
 				return Errors.EBADF;
 
 			f = fd_f.get(fd);
-			oriPath = get_oriPath(f.getPath());
-			local_verID = oriPath_verID.get(oriPath);
 
 			try {
+				// if it's a write, remove the copy first
+				// TODO: this is kind of hardcoding
+				if (f.getPath().indexOf(cache_split) != -1)
+					remove_copy(fd);
+
+				oriPath = get_oriPath(f.getPath());
+				local_verID = oriPath_verID.get(oriPath);
 				remote_verID = server.getVersionID(oriPath);
 				
 				// if f is a file and it's newer than server, then upload it to server
@@ -233,7 +332,7 @@ class Proxy {
 					System.out.println("Local file didn't change. ");
 				}
 			} catch (Exception e) {
-				System.out.println("Error in uploading: " + e.getMessage());
+				System.out.println("Error in close: " + e.getMessage());
 				e.printStackTrace();
 			}
 

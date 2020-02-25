@@ -132,7 +132,9 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			if (file.isDirectory())
 				return EISDIR;
 
-			file.delete();
+            if (!file.delete()) {
+                System.out.println("Error: delete file failed from " + remotePath);
+            }
             
 			// delete its pair in hashmap
             oriPath_verID.remove(path);
