@@ -48,6 +48,13 @@ class Proxy {
 		return path.substring(cachedir.length() + 1);
 	}
 
+	private static String copyPath2oriPath( String path ) {
+		String oriPath = path.substring(0, path.lastIndexOf(cache_split));
+		System.out.println("[copyPath2oriPath] copyPath: " + path);
+		System.out.println("[copyPath2oriPath] oriPath: " + oriPath);
+		return oriPath;
+	}
+
 	/*
 	 * copy_file: copy the file from srcPath to desPath.
 	 */
@@ -107,19 +114,21 @@ class Proxy {
 	}
 
 	/*
-	 * remove_copy: overwrite the original file with the copied version, and remove the 
-	 * 				copied version.
+	 * remove_copy: see if fd a write request. if yes, overwrite the original file with 
+	 * 				the copied version, and remove the copied version. if not, do nothing.
 	 */
 	private static void remove_copy( int fd ) {
 		try {
 			File copyFile = fd_f.get(fd);
 			String copyPath = copyFile.getPath();
 
+			// if it's a read, just return
+			// TODO: this is kind of hardcoding
+			if (copyPath.indexOf(cache_split) == -1)
+				return;
+
 			// find the original file
-			String oriPath = copyPath.substring(0, copyPath.lastIndexOf(cache_split)
-															- cache_split.length());
-			System.out.println("[remove_copy] copyPath: " + copyPath);
-			System.out.println("[remove_copy] oriPath: " + oriPath);
+			String oriPath = copyPath2oriPath(copyPath);
 
 			// overwrite the original file with the copy
 			copy_file(copyPath, oriPath);
@@ -128,6 +137,12 @@ class Proxy {
 			if (!copyFile.delete()) {
 				System.out.println("Error: delete file failed from " + oriPath);
 			}
+
+			// redirect fd to the original file
+			File oriFile = new File(oriPath);
+			fd_f.remove(fd);
+			fd_f.put(fd, oriFile);
+			
 		} catch (Exception e) {
             System.out.println("Error in remove: " + e.getMessage());
             e.printStackTrace();
@@ -257,13 +272,15 @@ class Proxy {
 			fd_f.put(fd, f);
 
 			// if it's a write, make a copy first
-			if (mode == "rw")
+			if (mode == "rw") {
 				make_copy(fd);
+				f = fd_f.get(fd);
+			}
 
 			// Cannot actually open a directory using RandomAccessFile
 			if (!f.isDirectory()) {
 				try {
-					raf = new RandomAccessFile(localPath, mode);
+					raf = new RandomAccessFile(f.getPath(), mode);
 					fd_raf.put(fd, raf);
 
 					// add the pair if the file is just created
@@ -296,13 +313,11 @@ class Proxy {
 			if (!fd_raf.containsKey(fd))
 				return Errors.EBADF;
 
-			f = fd_f.get(fd);
-
 			try {
-				// if it's a write, remove the copy first
-				// TODO: this is kind of hardcoding
-				if (f.getPath().indexOf(cache_split) != -1)
-					remove_copy(fd);
+				// if it's a write, remove the copy
+				remove_copy(fd);
+
+				f = fd_f.get(fd);
 
 				oriPath = get_oriPath(f.getPath());
 				local_verID = oriPath_verID.get(oriPath);
@@ -379,7 +394,7 @@ class Proxy {
 				return EIO;
 			}
 
-			oriPath = get_oriPath(f.getPath());
+			oriPath = get_oriPath( copyPath2oriPath(f.getPath()) );
 			// update versionID
 			// Mark: move synchronized keyword to function
 			oriPath_verID.put(oriPath, oriPath_verID.get(oriPath) + 1);
