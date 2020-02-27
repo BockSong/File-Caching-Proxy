@@ -13,7 +13,8 @@ class Proxy {
 	public static final int EIO = -5;
 
 	private static final String cache_split = "__cache/";
-	// Note: need to add synchronized for func, in this way don't need to use lock (synchronized method)
+	// About synchronization: having used synchronized keyword for func, so don't need to use 
+	// lock (synchronized method) for synchronized data structure
 	private static List<Integer> avail_fds = 
 								Collections.synchronizedList(new ArrayList<Integer>());
 	// compelte record of used fd and corresponding <file>
@@ -24,16 +25,23 @@ class Proxy {
 								ConcurrentHashMap<Integer, RandomAccessFile>();
 
     private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
-                                ConcurrentHashMap<String, Integer>();
+								ConcurrentHashMap<String, Integer>();
+								
+	// No need to inherit LinkedHashMap and use predefined methods, but manually achieve this
+	private static Map<Integer, File> LRU_cache = 
+								Collections.synchronizedMap(new LinkedHashMap<Integer, File>());
 
-	private static int cachesize;
 	private static String cachedir;
+	private static int cachesize;
+	private static int sizeCached;  // keep this lower than cachesize all the time
+	private static Object cache_lock = new Object();  // lock for accessing cache
 
 	private static ServerIntf server;
 	
 	private static void init( String ca_dir, int ca_size ) {
 		cachesize = ca_size;
 		cachedir = ca_dir;
+		sizeCached = 0;
 
 		// avail_fds: 0-1023
 		for (int i = 0; i< 1024; i++)
@@ -56,20 +64,39 @@ class Proxy {
 	}
 
 	/*
-	 * copy_file: copy the file from srcPath to desPath.
+	 * copy_file_in_cache: copy the file from srcPath to desPath in cache.
+	 * desPath doesn't have to be empty. Will overwrite automatically if need.
 	 */
-	private static void copy_file( String srcPath, String desPath ) {
+	private static void copy_file_in_cache( String srcPath, String desPath ) {
 		try {
 			File srcFile = new File(srcPath);
 			byte buffer[] = new byte[(int) srcFile.length()];
+			BufferedOutputStream writer;
 			BufferedInputStream reader = new
 			BufferedInputStream(new FileInputStream(srcPath));
 			reader.read(buffer, 0, buffer.length);
 			reader.close();
 
-			BufferedOutputStream writer = new
-			BufferedOutputStream(new FileOutputStream(desPath));
-			writer.write(buffer, 0, buffer.length);
+			// use cache lock to ensure safely when modifying sizeCached
+			synchronized (cache_lock) {
+				// first clear desPath if it already contains sth
+				File desFile = new File(desPath);
+				if (desFile.length() != 0) {
+					sizeCached -= desFile.length();
+					if (!desFile.delete()) {
+						System.out.println("[copy_file_in_cache] Error: delete file failed from " + oriPath);
+					}
+				}
+
+				// before writing, check that if there's enough space in cache
+				while (sizeCached + buffer.length > cachesize) {
+					cache_evict();
+				}
+
+				writer = new BufferedOutputStream(new FileOutputStream(desPath));
+				writer.write(buffer, 0, buffer.length);
+				sizeCached += buffer.length;
+			}
 			writer.flush();
 			writer.close();
 		} catch (Exception e) {
@@ -109,8 +136,6 @@ class Proxy {
 		// redirect fd to that new copy
 		fd_f.remove(fd);
 		fd_f.put(fd, copyFile);
-		
-		// TODO: add it in cache counting
 	}
 
 	/*
@@ -133,9 +158,14 @@ class Proxy {
 			// overwrite the original file with the copy
 			copy_file(copyPath, oriPath);
 
-			// remove that copy
-			if (!copyFile.delete()) {
-				System.out.println("Error: delete file failed from " + oriPath);
+			// remove the copy and clear counting
+			synchronized (cache_lock) {
+				if (copyFile.length() != 0) {
+					sizeCached -= copyFile.length();
+					if (!copyFile.delete()) {
+						System.out.println("[rm_file_in_cache] Error: delete file failed from " + oriPath);
+					}
+				}
 			}
 
 			// redirect fd to the original file
@@ -147,8 +177,6 @@ class Proxy {
             System.out.println("Error in remove: " + e.getMessage());
             e.printStackTrace();
 		}
-
-		// TODO: clear it in cache counting
 	}
 
 	private static class FileHandler implements FileHandling {
@@ -203,13 +231,23 @@ class Proxy {
 							byte[] fi_data = fi.filedata;
 							BufferedOutputStream writer = new 
 							BufferedOutputStream(new FileOutputStream(localPath));
-							writer.write(fi_data, 0, fi_data.length);
+
+							// use cache lock to ensure safely when modifying sizeCached
+							synchronized (cache_lock) {
+								// before writing, check that if there's enough space in cache
+								while (sizeCached + fi_data.length > cachesize) {
+									cache_evict();
+								}
+
+								writer.write(fi_data, 0, fi_data.length);
+								sizeCached += fi_data.length;
+							}
 							writer.flush();
 							writer.close();
 
 							// update the file-verID pair
 							// Q: what if there multiple clients trying to add pairs?
-							// It should be fine, just written multiple times and last win!
+							// It should be fine, just write multiple times and last win!
 							oriPath_verID.put(path, remote_verID);
 						}
 						else {
@@ -323,6 +361,8 @@ class Proxy {
 				local_verID = oriPath_verID.get(oriPath);
 				remote_verID = server.getVersionID(oriPath);
 				
+				// TODO: mark f as the most recent used one in LRU_cache
+
 				// if f is a file and it's newer than server, then upload it to server
 				if (!f.isDirectory() && (local_verID > remote_verID)) {
 						raf = fd_raf.get(fd);
@@ -383,8 +423,17 @@ class Proxy {
 			raf = fd_raf.get(fd);
 
 			try {
-				// just local execution
-				raf.write(buf);
+				// use lock to ensure safely on sizeCached
+				synchronized (cache_lock) {
+					// before writing, check that if there's enough space in cache
+					while (sizeCached + buf.length > cachesize) {
+						cache_evict();
+					}
+	
+					// local execution for write
+					raf.write(buf);
+					sizeCached += buf.length;
+				}
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
 				// since we can catch permission error here, 
@@ -509,8 +558,8 @@ class Proxy {
 			try {
 				// delete the file from server
 				rv = server.unlink(path);
-				// TODO: already opened file need to still could use them
-				// in this case do we still remove rv's record in proxy? do we have to? if so, when?		
+				// TODO: also clear copies; but for already opened copies, leave them for continuous use
+				// in this case do we still remove rv's record in proxy? do we have to? if so but not now, when?		
 			} catch (Exception e) {
 				System.out.println("Error in unlink: " + e.getMessage());
 				e.printStackTrace();
