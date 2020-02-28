@@ -13,6 +13,7 @@ import java.util.concurrent.*;
 class Proxy {
 
 	public static final int EIO = -5;
+	public static final int EACCES = -13;
 
 	private static final String cache_split = "__cache/";
 	// About synchronization: having used synchronized keyword for func, so don't need to use 
@@ -31,6 +32,9 @@ class Proxy {
 								
     private static ConcurrentHashMap<String, Integer> readerCount = new 
 								ConcurrentHashMap<String, Integer>();
+	// For every opened file, record Canonical Path - Relative Path
+	private static ConcurrentHashMap<String, String> opened_path = new 
+								ConcurrentHashMap<String, String>();
 	
 	// only contains original version (without copies), since evicts only happen to ori file
 	private static Map<String, File> LRU_cache;
@@ -259,24 +263,48 @@ class Proxy {
 		 * It returns -1 on failure, and sets errno to indicate the error.
 		 */
 		public synchronized int open( String path, OpenOption o ) {
-			int fd, remote_verID;
 			File f;
-			String mode, localPath;
-			RandomAccessFile raf;
 			Boolean update;
+			int fd, remote_verID;
+			RandomAccessFile raf;
+			String mode, localPath;
+			String oriPath = path;  // general relative path without root prefix
 			
-			localPath = ori2localPath(path);
-			System.out.println("--[OPEN] called from localPath: " + localPath);
+			// if it's a absolute path, return an error
+			if (oriPath.substring(0, 1).equals("/"))
+				return EACCES;
 
 			if (avail_fds.size() == 0)
 				return Errors.EMFILE;
 
+			localPath = ori2localPath(oriPath);
 			f = new File(localPath);
-			
+			System.out.println("--[OPEN] called from localPath: " + localPath);
+
 			try {
-				remote_verID = server.getVersionID(path);
+				System.out.println("CanonicalPath: " + f.getCanonicalPath());
+				// if it's already opened, use the same path format as the first one
+				if ( opened_path.containsKey(f.getCanonicalPath()) ) {
+					oriPath = opened_path.get(f.getCanonicalPath());
+					System.out.println("what you got: " + oriPath);
+					localPath = ori2localPath(oriPath);
+					f = new File(localPath);
+				}
+				else {
+					// check if it's inside the root folder
+					File root = new File(cachedir);
+					if (f.getCanonicalPath().indexOf(root.getCanonicalPath()) == -1) {
+						return EACCES;
+					}
+					else {
+						// if it's fine, add it to the path record
+						opened_path.put(f.getCanonicalPath(), oriPath);
+					}
+				}
+				
+				remote_verID = server.getVersionID(oriPath);
 				if (f.exists() && f.isFile()) {
-					System.out.println("found local_verID: " + oriPath_verID.get(path) + 
+					System.out.println("found local_verID: " + oriPath_verID.get(oriPath) + 
 														" remote_verID: " + remote_verID);
 				}
 				else
@@ -286,7 +314,7 @@ class Proxy {
 				if (remote_verID == -1) {
 					update = false;  // if server doesn't have this file, don't update
 				}
-				else if (f.exists() && f.isFile() && (remote_verID <= oriPath_verID.get(path)) ) {
+				else if (f.exists() && f.isFile() && (remote_verID <= oriPath_verID.get(oriPath)) ) {
 					update = false;  // if we have this file and it's the newest, don't update
 				}
 				else {
@@ -294,8 +322,8 @@ class Proxy {
 				}
 
 				if (update) {
-					System.out.println("downloading of path: " + path);
-					FileInfo fi = server.getFile(path);
+					System.out.println("downloading of path: " + oriPath);
+					FileInfo fi = server.getFile(oriPath);
 					// Mark: in case somethig wrong; non-exist file shouldn't be transmitted
 					if (fi.exist) {
 						if (fi.isFile) {
@@ -328,7 +356,7 @@ class Proxy {
 
 							// update the file-verID pair
 							// If multiple clients try to update same pair, shoule be last win
-							oriPath_verID.put(path, remote_verID);
+							oriPath_verID.put(oriPath, remote_verID);
 						}
 						else {
 							// if it's a directory and doesn't exist locally, make it
@@ -397,22 +425,21 @@ class Proxy {
 
 				// if it's read, # of readers add 1
 				if (mode == "r") {
-					if (readerCount.contains(path)) {
-						readerCount.put(path, readerCount.get(path) + 1);
+					if (readerCount.contains(oriPath)) {
+						readerCount.put(oriPath, readerCount.get(oriPath) + 1);
 					}
 					else {
-						readerCount.put(path, 1);
+						readerCount.put(oriPath, 1);
 					}
 				}
 	
 				try {
-					System.out.println("[open] Let's see: " + f.getPath() + " " + mode);
 					raf = new RandomAccessFile(f.getPath(), mode);
 					fd_raf.put(fd, raf);
 
 					// add the pair if the file is just created
-					if (!oriPath_verID.containsKey(path))
-						oriPath_verID.put(path, 0);
+					if (!oriPath_verID.containsKey(oriPath))
+						oriPath_verID.put(oriPath, 0);
 				} catch (Exception e) {
 					System.out.println("throw IOException");
 					return EIO;
