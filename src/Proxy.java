@@ -4,8 +4,10 @@ import java.io.*;
 import java.rmi.Naming;
 import java.util.List;
 import java.util.Map;
+import java.util.Iterator;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.concurrent.*;
 
 class Proxy {
@@ -68,10 +70,10 @@ class Proxy {
 	}
 
 	/*
-	 * copy_file_in_cache: copy the file from srcPath to desPath in cache.
-	 * desPath doesn't have to be empty. Will overwrite automatically if need.
+	 * copy_file: copy the file from srcPath to desPath in cache. desPath doesn't have to be empty,
+	 * 			  will overwrite automatically if needed.
 	 */
-	private synchronized static void copy_file_in_cache( String srcPath, String desPath ) {
+	private synchronized static void copy_file( String srcPath, String desPath ) {
 		try {
 			File srcFile = new File(srcPath);
 			byte buffer[] = new byte[(int) srcFile.length()];
@@ -88,13 +90,14 @@ class Proxy {
 				if (desFile.length() != 0) {
 					sizeCached -= desFile.length();
 					if (!desFile.delete()) {
-						System.out.println("[copy_file_in_cache] Error: delete file failed from " + oriPath);
+						System.out.println("[copy_file_in_cache] Error: delete file failed from " + desPath);
 					}
 				}
 
 				// before writing, check that if there's enough space in cache
 				while (sizeCached + buffer.length > cachesize) {
-					cache_evict();
+					if (cache_evict() != 0)
+						System.out.println("[open] Error occured in eviction");
 				}
 
 				writer = new BufferedOutputStream(new FileOutputStream(desPath));
@@ -205,17 +208,21 @@ class Proxy {
 
 	/*
 	 * cache_evict: evict an object in cache based LRU algorithm.
+	 * return 0 on success. If cache is empty, return -1. If there's other error, return -2.
 	 */
-	private synchronized static void cache_evict() {
+	private synchronized static int cache_evict() {
+		if (LRU_cache.size() == 0)
+			return -1;
 		try {
 			File f_evict;
-			String path_evict;
+			String path_evict = "";
 			Iterator iter = LRU_cache.entrySet().iterator();
+			Map.Entry entry;
 
 			// find the file to be evicted
 			while (iter.hasNext()) {
-				Map.Entry entry = (Map.Entry) iter.next();
-				path_evict = entry.getKey();
+				entry = (Map.Entry) iter.next();
+				path_evict = entry.getKey().toString();
 				f_evict = new File(path_evict + cache_split);
 
 				// if the file is opened (has any copy), skip it
@@ -223,7 +230,7 @@ class Proxy {
 					break;
 				}
 			}
-			f_evict = entry.getValue();
+			f_evict = new File(path_evict);
 
 			synchronized (cache_lock) {
 				sizeCached -= f_evict.length();
@@ -236,9 +243,11 @@ class Proxy {
 					System.out.println("[cache_evict] Error: delete file failed from " + path_evict);
 				}
 			}
+			return 0;
 		} catch (Exception e) {
             System.out.println("Error in cache_evict: " + e.getMessage());
-            e.printStackTrace();
+			e.printStackTrace();
+			return -2;
 		}
 	}
 
@@ -299,7 +308,8 @@ class Proxy {
 							synchronized (cache_lock) {
 								// before writing, check that if there's enough space in cache
 								while (sizeCached + fi_data.length > cachesize) {
-									cache_evict();
+									if (cache_evict() != 0)
+										System.out.println("[open] Error occured in eviction");
 								}
 
 								writer.write(fi_data, 0, fi_data.length);
@@ -311,8 +321,7 @@ class Proxy {
 							writer.close();
 
 							// update the file-verID pair
-							// Q: what if there multiple clients trying to add pairs?
-							// It should be fine, just write multiple times and last win!
+							// If multiple clients try to update same pair, shoule be last win
 							oriPath_verID.put(path, remote_verID);
 						}
 						else {
@@ -501,7 +510,8 @@ class Proxy {
 				synchronized (cache_lock) {
 					// before writing, check that if there's enough space in cache
 					while (sizeCached + buf.length > cachesize) {
-						cache_evict();
+						if (cache_evict() != 0)
+							System.out.println("[open] Error occured in eviction");
 					}
 	
 					// local execution for write
@@ -650,16 +660,8 @@ class Proxy {
 							}
 						}
 					}
-					else {
-						// TODO: if the drectory is open, can you open it? (same thing on server)
-						// TODO: can you unlink a non-empty directory? How to deal with this?
-						// delete the empty directory
-						if (!f.delete()) {
-							System.out.println("[unlink] Error: delete directory failed from " + localPath);
-						}
-					}
+					// otherwise, unlink to directory is not permitted. So do thing for this case.
 				}
-
 			} catch (Exception e) {
 				System.out.println("Error in unlink: " + e.getMessage());
 				e.printStackTrace();
