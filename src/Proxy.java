@@ -27,6 +27,9 @@ class Proxy {
     private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
 								ConcurrentHashMap<String, Integer>();
 								
+    private static ConcurrentHashMap<String, Integer> readerCount = new 
+								ConcurrentHashMap<String, Integer>();
+	
 	// only contains original version (without copies), since evicts only happen to ori file
 	private static Map<String, File> LRU_cache;
 
@@ -49,11 +52,11 @@ class Proxy {
 			avail_fds.add(i); 
 	}
 
-	private static String get_localPath( String path ) {
+	private static String ori2localPath( String path ) {
 		return cachedir + "/" + path;
 	}
 
-	private static String get_oriPath( String path ) {
+	private static String local2oriPath( String path ) {
 		return path.substring(cachedir.length() + 1);
 	}
 
@@ -107,36 +110,54 @@ class Proxy {
 	}
 
 	/*
-	 * make_copy: make a copy of file corresponed with fd and redirect fd to the new file.
+	 * make_copy: For write request, make a copy of file corresponed with fd and redirect
+	 * 			  fd to the new file. Every writer has their own copy. For read request, 
+	 * 			  first check if the copy already exist. If not, create it. All readers 
+	 * 			  share one copy.
 	 */
-	private synchronized static void make_copy( int fd ) {
-		File oriFile = fd_f.get(fd), copyFile;
-		String oriPath = oriFile.getPath();
-		String copyPath, fileName; 
-
-		fileName = oriFile.getName();
-		File copyDir = new File(oriPath + cache_split);
-		// if it doesn't exist, create this directory
-		if ( !copyDir.exists() && !copyDir.mkdirs() ) {
-			System.out.println("Error: unable to make new directory in cache!");
-		};
-
-		// find an available copyPath
-		for (int i = 0; ; i++) {
-			copyPath = oriPath + cache_split + fileName + "_" + i;
-			copyFile = new File(copyPath);
-			if (!copyFile.exists()) {
-				System.out.println("[make_copy] stored at: " + copyPath);
-				break;
+	private synchronized static void make_copy( int fd, String mode ) {
+		try {
+			File oriFile = fd_f.get(fd), copyFile;
+			String oriPath = oriFile.getPath();
+			String copyPath, fileName; 
+	
+			fileName = oriFile.getName();
+			File copyDir = new File(oriPath + cache_split);
+			// if it doesn't exist, create this directory
+			if ( !copyDir.exists() && !copyDir.mkdirs() ) {
+				System.out.println("Error: unable to make new directory in cache!");
+			};
+	
+			if (mode == "r") {
+				// reader copy path is definite
+				copyPath = oriPath + cache_split + fileName + "_reader";
+				copyFile = new File(copyPath);
 			}
+			else {
+				// find an available copyPath for a new copy
+				for (int i = 0; ; i++) {
+					copyPath = oriPath + cache_split + fileName + "_" + i;
+					copyFile = new File(copyPath);
+					if (!copyFile.exists()) {
+						System.out.println("[make_copy] stored at: " + copyPath);
+						break;
+					}
+				}
+			}
+			
+			// check if (reader) copy already exists
+			if (!copyFile.exists()) {
+				// otherwise, copy the file
+				copy_file(oriPath, copyPath);
+			}
+	
+			// redirect fd to that new copy
+			fd_f.remove(fd);
+			fd_f.put(fd, copyFile);
+		} catch (Exception e) {
+			System.out.println("[make_copy] Error: " + e.getMessage());
+			e.printStackTrace();
 		}
-
-		// copy the file
-		copy_file(oriPath, copyPath);
-
-		// redirect fd to that new copy
-		fd_f.remove(fd);
-		fd_f.put(fd, copyFile);
 	}
 
 	/*
@@ -145,32 +166,34 @@ class Proxy {
 	 */
 	private synchronized static void remove_copy( int fd ) {
 		try {
-			File copyFile = fd_f.get(fd);
+			File copyFile = fd_f.get(fd), oriFile;
 			String copyPath = copyFile.getPath();
-
-			// if it's a read, just return
-			// TODO: this is kind of hardcoding
-			if (copyPath.indexOf(cache_split) == -1)
-				return;
-
-			// find the original file
 			String oriPath = copyPath2oriPath(copyPath);
 
-			// overwrite the original file with the copy
-			copy_file(copyPath, oriPath);
+			if (readerCount.contains(oriPath)) {
+				// for read, decrease the # of reader
+				readerCount.put(oriPath, readerCount.get(oriPath) - 1);
+			}
+			else {
+				// for writer, overwrite the original file with the copy
+				copy_file(copyPath, oriPath);
+			}
 
-			// remove the copy and clear counting
-			synchronized (cache_lock) {
-				if (copyFile.length() != 0) {
-					sizeCached -= copyFile.length();
-					if (!copyFile.delete()) {
-						System.out.println("[rm_file_in_cache] Error: delete file failed from " + oriPath);
+			// except it's a read and there are still readers
+			if (!readerCount.contains(oriPath) || readerCount.get(oriPath) < 1) {
+				// otherwise, remove the copy and clear counting
+				synchronized (cache_lock) {
+					if (copyFile.length() != 0) {
+						sizeCached -= copyFile.length();
+						if (!copyFile.delete()) {
+							System.out.println("[rm_file_in_cache] Error: delete file failed from " + oriPath);
+						}
 					}
 				}
 			}
 
-			// redirect fd to the original file
-			File oriFile = new File(oriPath);
+			// now redirect fd to the original file
+			oriFile = new File(oriPath);
 			fd_f.remove(fd);
 			fd_f.put(fd, oriFile);
 			
@@ -234,7 +257,7 @@ class Proxy {
 			RandomAccessFile raf;
 			Boolean update;
 			
-			localPath = get_localPath(path);
+			localPath = ori2localPath(path);
 			System.out.println("--[OPEN] called from localPath: " + localPath);
 
 			if (avail_fds.size() == 0)
@@ -351,14 +374,22 @@ class Proxy {
 
 			fd_f.put(fd, f);
 
-			// if it's a write, make a copy first
-			if (mode == "rw") {
-				make_copy(fd);
-				f = fd_f.get(fd);
-			}
-
 			// Cannot actually open a directory using RandomAccessFile
 			if (!f.isDirectory()) {
+				// make a new copy for reader or writer if needed
+				make_copy(fd, mode);
+				f = fd_f.get(fd);
+
+				// if it's read, # of readers add 1
+				if (mode == "r") {
+					if (readerCount.contains(path)) {
+						readerCount.put(path, readerCount.get(path) + 1);
+					}
+					else {
+						readerCount.put(path, 1);
+					}
+				}
+	
 				try {
 					raf = new RandomAccessFile(f.getPath(), mode);
 					fd_raf.put(fd, raf);
@@ -394,12 +425,12 @@ class Proxy {
 				return Errors.EBADF;
 
 			try {
-				// if it's a write, remove the copy
+				// remove the copy if necessary
 				remove_copy(fd);
 
 				f = fd_f.get(fd);
 
-				oriPath = get_oriPath(f.getPath());
+				oriPath = local2oriPath(f.getPath());
 				local_verID = oriPath_verID.get(oriPath);
 				remote_verID = server.getVersionID(oriPath);
 				
@@ -479,14 +510,14 @@ class Proxy {
 				}
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
-				// since we can catch permission error here, 
-				// r/w permissions of files are not explicitly stored
+				// r/w permissions can be accessed from readersCount
+				// while we can also catch permission error here
 				if (e instanceof IOException)
 					return Errors.EBADF;
 				return EIO;
 			}
 
-			oriPath = get_oriPath( copyPath2oriPath(f.getPath()) );
+			oriPath = local2oriPath( copyPath2oriPath(f.getPath()) );
 			// update versionID
 			// Mark: move synchronized keyword to function
 			oriPath_verID.put(oriPath, oriPath_verID.get(oriPath) + 1);
@@ -595,7 +626,7 @@ class Proxy {
 		 */
 		public synchronized int unlink( String path ) {
 			int rv = -1;
-			String localPath = get_localPath(path);
+			String localPath = ori2localPath(path);
 			File f;
 			System.out.println("--[UNLINK] called from " + path);
 			
