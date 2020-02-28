@@ -70,8 +70,8 @@ class Proxy {
 	}
 
 	/*
-	 * copy_file: copy the file from srcPath to desPath in cache. desPath doesn't have to be empty,
-	 * 			  will overwrite automatically if needed.
+	 * copy_file: copy the file from srcPath to desPath in cache. srcPath must exist. desPath
+	 * 			  doesn't have to be empty, will overwrite automatically if needed.
 	 */
 	private synchronized static void copy_file( String srcPath, String desPath ) {
 		try {
@@ -128,7 +128,7 @@ class Proxy {
 			File copyDir = new File(oriPath + cache_split);
 			// if it doesn't exist, create this directory
 			if ( !copyDir.exists() && !copyDir.mkdirs() ) {
-				System.out.println("Error: unable to make new directory in cache!");
+				System.out.println("[make_copy] Error: unable to make new directory in cache!");
 			};
 	
 			if (mode == "r") {
@@ -142,15 +142,14 @@ class Proxy {
 					copyPath = oriPath + cache_split + fileName + "_" + i;
 					copyFile = new File(copyPath);
 					if (!copyFile.exists()) {
-						System.out.println("[make_copy] stored at: " + copyPath);
+						System.out.println("[make_copy] Path is set as: " + copyPath);
 						break;
 					}
 				}
 			}
 			
-			// check if (reader) copy already exists
-			if (!copyFile.exists()) {
-				// otherwise, copy the file
+			// if oriFile exist and copyFile doesn't exist, make the copy
+			if (oriFile.exists() && !copyFile.exists()) {
 				copy_file(oriPath, copyPath);
 			}
 	
@@ -277,10 +276,11 @@ class Proxy {
 			try {
 				remote_verID = server.getVersionID(path);
 				if (f.exists() && f.isFile()) {
-					System.out.println("local_verID: " + oriPath_verID.get(path) + " remote_verID: " + remote_verID);
+					System.out.println("found local_verID: " + oriPath_verID.get(path) + 
+														" remote_verID: " + remote_verID);
 				}
 				else
-					System.out.println("remote_verID: " + remote_verID);
+					System.out.println("get remote_verID: " + remote_verID);
 
 				// check if we need to update cache
 				if (remote_verID == -1) {
@@ -296,11 +296,17 @@ class Proxy {
 				if (update) {
 					System.out.println("downloading of path: " + path);
 					FileInfo fi = server.getFile(path);
-					// In case somethig wrong; non-exist file shouldn't be transmitted
+					// Mark: in case somethig wrong; non-exist file shouldn't be transmitted
 					if (fi.exist) {
 						if (fi.isFile) {
 							// if it's a file, write it to local cache
 							byte[] fi_data = fi.filedata;
+							File Dir = new File(localPath.substring(0, localPath.lastIndexOf("/")) );
+							// If its directory doesn't exist, create it first
+							if ( !Dir.exists() && !Dir.mkdirs() ) {
+								System.out.println("[open] Error: unable to make new directory in cache!");
+							};
+							
 							BufferedOutputStream writer = new 
 							BufferedOutputStream(new FileOutputStream(localPath));
 
@@ -327,19 +333,19 @@ class Proxy {
 						else {
 							// if it's a directory and doesn't exist locally, make it
 							if (!f.exists() && !f.mkdirs()) {
-								System.out.println("Error: unable to make new directory in cache!");
+								System.out.println("[open] Error: unable to make new directory in cache!");
 							};
 						}
 					}
 					else {
-						System.out.println("[Error] this directory does not exist remotely.");
+						System.out.println("[open] Error: this directory does not exist remotely.");
 					}
 				}
 				else {
-					System.out.println("Local file is already up-to-date. ");
+					System.out.println("[open] No need to download file. ");
 				}
 			} catch (Exception e) {
-				System.out.println("Error in downloading: " + e.getMessage());
+				System.out.println("[open] Error in downloading: " + e.getMessage());
 				e.printStackTrace();
 			}
 
@@ -400,6 +406,7 @@ class Proxy {
 				}
 	
 				try {
+					System.out.println("[open] Let's see: " + f.getPath() + " " + mode);
 					raf = new RandomAccessFile(f.getPath(), mode);
 					fd_raf.put(fd, raf);
 

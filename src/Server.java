@@ -90,7 +90,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             System.out.println("        file compressed successfully with ID "
                                                      + oriPath_verID.get(path));
         }
-
         return fi;
     }
 
@@ -103,6 +102,12 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             System.out.println("[setFile] remotePath: " + remotePath);
     
             File file = new File(remotePath);
+            File Dir = new File(remotePath.substring(0, remotePath.lastIndexOf("/")) );
+			// If its directory doesn't exist, create it first
+			if ( !Dir.exists() && !Dir.mkdirs() ) {
+				System.out.println("[setFile] Error: unable to make new directory in cache!");
+            };
+            
             BufferedOutputStream writer = new
             BufferedOutputStream(new FileOutputStream(remotePath));
             writer.write(fi_data, 0, fi_data.length);
@@ -114,7 +119,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             System.out.println("        file loaded successfully with ID "
                                                         + fi.versionID);
         } catch (Exception e) {
-            System.out.println("Error in setFile: " + e.getMessage());
+            System.out.println("[setFile] Error: " + e.getMessage());
             e.printStackTrace();
         }
     }
