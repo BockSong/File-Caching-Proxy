@@ -17,19 +17,18 @@ class Proxy {
 	// lock (synchronized method) for synchronized data structure
 	private static List<Integer> avail_fds = 
 								Collections.synchronizedList(new ArrayList<Integer>());
-	// compelte record of used fd and corresponding <file>
+	// this is a compelte record of used fd and corresponding <file>
 	private static ConcurrentHashMap<Integer, File> fd_f = new 
 								ConcurrentHashMap<Integer, File>();
-	// may try synchronizedmap if this one is not good enough
+	// this map doesn't contains directories
 	private static ConcurrentHashMap<Integer, RandomAccessFile> fd_raf = new 
 								ConcurrentHashMap<Integer, RandomAccessFile>();
 
     private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
 								ConcurrentHashMap<String, Integer>();
 								
-	// No need to inherit LinkedHashMap and use predefined methods, but manually achieve this
-	private static Map<Integer, File> LRU_cache = 
-								Collections.synchronizedMap(new LinkedHashMap<Integer, File>());
+	// only contains original version (without copies), since evicts only happen to ori file
+	private static Map<String, File> LRU_cache;
 
 	private static String cachedir;
 	private static int cachesize;
@@ -42,6 +41,8 @@ class Proxy {
 		cachesize = ca_size;
 		cachedir = ca_dir;
 		sizeCached = 0;
+
+		LRU_cache = Collections.synchronizedMap(new LinkedHashMap<String, File>(cachesize, 0.9f, true));
 
 		// avail_fds: 0-1023
 		for (int i = 0; i< 1024; i++)
@@ -67,7 +68,7 @@ class Proxy {
 	 * copy_file_in_cache: copy the file from srcPath to desPath in cache.
 	 * desPath doesn't have to be empty. Will overwrite automatically if need.
 	 */
-	private static void copy_file_in_cache( String srcPath, String desPath ) {
+	private synchronized static void copy_file_in_cache( String srcPath, String desPath ) {
 		try {
 			File srcFile = new File(srcPath);
 			byte buffer[] = new byte[(int) srcFile.length()];
@@ -108,7 +109,7 @@ class Proxy {
 	/*
 	 * make_copy: make a copy of file corresponed with fd and redirect fd to the new file.
 	 */
-	private static void make_copy( int fd ) {
+	private synchronized static void make_copy( int fd ) {
 		File oriFile = fd_f.get(fd), copyFile;
 		String oriPath = oriFile.getPath();
 		String copyPath, fileName; 
@@ -142,7 +143,7 @@ class Proxy {
 	 * remove_copy: see if fd a write request. if yes, overwrite the original file with 
 	 * 				the copied version, and remove the copied version. if not, do nothing.
 	 */
-	private static void remove_copy( int fd ) {
+	private synchronized static void remove_copy( int fd ) {
 		try {
 			File copyFile = fd_f.get(fd);
 			String copyPath = copyFile.getPath();
@@ -175,6 +176,45 @@ class Proxy {
 			
 		} catch (Exception e) {
             System.out.println("Error in remove: " + e.getMessage());
+            e.printStackTrace();
+		}
+	}
+
+	/*
+	 * cache_evict: evict an object in cache based LRU algorithm.
+	 */
+	private synchronized static void cache_evict() {
+		try {
+			File f_evict;
+			String path_evict;
+			Iterator iter = LRU_cache.entrySet().iterator();
+
+			// find the file to be evicted
+			while (iter.hasNext()) {
+				Map.Entry entry = (Map.Entry) iter.next();
+				path_evict = entry.getKey();
+				f_evict = new File(path_evict + cache_split);
+
+				// if the file is opened (has any copy), skip it
+				if ( !f_evict.isDirectory() || f_evict.list().length == 0 ) {
+					break;
+				}
+			}
+			f_evict = entry.getValue();
+
+			synchronized (cache_lock) {
+				sizeCached -= f_evict.length();
+
+				// remove it in LRU_cache
+				LRU_cache.remove(path_evict);
+
+				// delete the cache file
+				if (!f_evict.delete()) {
+					System.out.println("[cache_evict] Error: delete file failed from " + path_evict);
+				}
+			}
+		} catch (Exception e) {
+            System.out.println("Error in cache_evict: " + e.getMessage());
             e.printStackTrace();
 		}
 	}
@@ -241,6 +281,8 @@ class Proxy {
 
 								writer.write(fi_data, 0, fi_data.length);
 								sizeCached += fi_data.length;
+
+								LRU_cache.put(localPath, f);
 							}
 							writer.flush();
 							writer.close();
@@ -361,7 +403,8 @@ class Proxy {
 				local_verID = oriPath_verID.get(oriPath);
 				remote_verID = server.getVersionID(oriPath);
 				
-				// TODO: mark f as the most recent used one in LRU_cache
+				// set f as the most recent one in LRU_cache (automatically done by LinkedHashmap)
+				System.out.println("File usage recorded: " + LRU_cache.get(oriPath));
 
 				// if f is a file and it's newer than server, then upload it to server
 				if (!f.isDirectory() && (local_verID > remote_verID)) {
@@ -552,14 +595,40 @@ class Proxy {
 		 */
 		public synchronized int unlink( String path ) {
 			int rv = -1;
+			String localPath = get_localPath(path);
 			File f;
 			System.out.println("--[UNLINK] called from " + path);
 			
 			try {
 				// delete the file from server
 				rv = server.unlink(path);
-				// TODO: also clear copies; but for already opened copies, leave them for continuous use
-				// in this case do we still remove rv's record in proxy? do we have to? if so but not now, when?		
+
+				f = new File(localPath);
+				if (f.exists()) {
+					if (f.isFile() ) {
+						// clear cache but leave copies
+						synchronized (cache_lock) {
+							// remove the file in LRU_cache
+							LRU_cache.remove(localPath);
+		
+							sizeCached -= f.length();
+		
+							// delete the cache file
+							if (!f.delete()) {
+								System.out.println("[unlink] Error: delete file failed from " + localPath);
+							}
+						}
+					}
+					else {
+						// TODO: if the drectory is open, can you open it? (same thing on server)
+						// TODO: can you unlink a non-empty directory? How to deal with this?
+						// delete the empty directory
+						if (!f.delete()) {
+							System.out.println("[unlink] Error: delete directory failed from " + localPath);
+						}
+					}
+				}
+
 			} catch (Exception e) {
 				System.out.println("Error in unlink: " + e.getMessage());
 				e.printStackTrace();
