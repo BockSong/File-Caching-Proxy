@@ -53,6 +53,31 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
         }
     }
 
+    // client call this to download a specfic chunk
+    public synchronized FileInfo getChunk( String path, long offset )
+            throws RemoteException {
+        FileInfo fi;
+        String remotePath = getRemotepath(path);
+        System.out.println("[getChunk] remotePath: " + remotePath);
+        try {
+            File file = new File(remotePath);
+            long send_len = Math.min(MAX_LEN, file.length() - offset);
+			RandomAccessFile reader = new RandomAccessFile(remotePath, "r");
+            byte buffer[] = new byte[(int) send_len];
+
+            reader.seek(offset);
+            reader.read(buffer);
+            reader.close();
+            fi = new FileInfo(path, buffer, oriPath_verID.get(path), true, file.length());
+
+        } catch(Exception e) {
+            System.out.println("[getChunk] Error: " + e.getMessage());
+            e.printStackTrace();
+            fi = null;
+        }
+        return fi;
+    }
+
     // client call this to download file
     public synchronized FileInfo getFile( String path )
             throws RemoteException {
@@ -68,27 +93,34 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
         }
         else if (!file.isFile()) {
             System.out.println("        this is a directory. ");
-            fi = new FileInfo(path);
+            fi = new FileInfo(path, false, 0);
         }
         else {
-            byte buffer[] = new byte[(int) file.length()];
-            try {
-                BufferedInputStream reader = new
-                BufferedInputStream(new FileInputStream(remotePath));
-                reader.read(buffer, 0, buffer.length);
-                reader.close();
-    
-            } catch(Exception e) {
-                System.out.println("Error in getFile: " + e.getMessage());
-                e.printStackTrace();
-            }
-            // for the first time a client requested
+            // for the first time a file is requested, record its versionID
             if (!oriPath_verID.containsKey(path)) {
                 oriPath_verID.put(path, 0);
             }
-            fi = new FileInfo(path, buffer, oriPath_verID.get(path));
-            System.out.println("        file compressed successfully with ID "
-                                                     + oriPath_verID.get(path));
+            if (file.length() < MAX_LEN) {
+                // just send the whole file
+                byte buffer[] = new byte[(int) file.length()];
+                try {
+                    BufferedInputStream reader = new
+                    BufferedInputStream(new FileInputStream(remotePath));
+                    reader.read(buffer, 0, buffer.length);
+                    reader.close();
+
+                } catch(Exception e) {
+                    System.out.println("[getFile] Error: " + e.getMessage());
+                    e.printStackTrace();
+                }
+                fi = new FileInfo(path, buffer, oriPath_verID.get(path), false, file.length());
+                System.out.println("        file compressed successfully with ID "
+                                                            + oriPath_verID.get(path));
+            }
+            else {
+                // send an empty fi indicating will be using chunking
+                fi = new FileInfo(path, true, file.length());
+            }
         }
         return fi;
     }
@@ -97,6 +129,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     public synchronized void setFile( FileInfo fi )
             throws RemoteException {
         try {
+            // TODO: check if need chunking
             String remotePath = getRemotepath(fi.path);
             byte[] fi_data = fi.filedata;
             System.out.println("[setFile] remotePath: " + remotePath);

@@ -8,6 +8,9 @@ import java.rmi.Naming;
 
 // Indicates remote interface description
 public interface ServerIntf extends Remote {
+             public FileInfo getChunk( String path, long offset )
+                           throws RemoteException;
+
              public FileInfo getFile( String path )
                            throws RemoteException;
 

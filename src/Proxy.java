@@ -348,48 +348,70 @@ class Proxy {
 				if (update) {
 					System.out.println("downloading of path: " + oriPath);
 					FileInfo fi = server.getFile(oriPath);
+					// if it's a file, write it to local cache
 					if (fi.isFile) {
-						// if it's a file, write it to local cache
-						byte[] fi_data = fi.filedata;
 						File Dir = new File(localPath.substring(0, localPath.lastIndexOf("/")) );
 						// If its directory doesn't exist, create it first
 						if ( !Dir.exists() && !Dir.mkdirs() ) {
 							System.out.println("[open] Error: unable to make new directory in cache!");
 						};
 						
-						BufferedOutputStream writer = new 
-						BufferedOutputStream(new FileOutputStream(localPath));
+						byte[] fi_data;
+						RandomAccessFile writer = new RandomAccessFile(localPath, "rw");
 
-						// use cache lock to ensure safely when modifying sizeCached
-						synchronized (cache_lock) {
-							// before writing, check that if there's enough space in cache
-							while (sizeCached + fi_data.length > cachesize) {
-								if (cache_evict() != 0)
-									System.out.println("[open] Error occured in eviction");
-							}
+						// if it's single file, receive it directly; otherwise call getChunk
+						if (fi.isChunking) {
+							long file_len = fi.length;
+							long recv_len = file_len;
 
-							writer.write(fi_data, 0, fi_data.length);
-							sizeCached += fi_data.length;
+							// do chunking and send
+							while (recv_len > 0) {
+								fi = server.getChunk(oriPath, file_len - recv_len);
+								fi_data = fi.filedata;
 
-							LRU_cache.put(localPath, f);
-
-							if (cache_user_count.contains(localPath)) {
-								cache_user_count.put(localPath, cache_user_count.get(localPath) + 1);
-							}
-							else {
-								cache_user_count.put(localPath, 1);
+								// use cache lock to ensure safely when modifying sizeCached
+								synchronized (cache_lock) {
+									// check that if there's enough space in cache to write
+									while (sizeCached + fi_data.length > cachesize) {
+										if (cache_evict() != 0)
+											System.out.println("[open] Error occured in eviction");
+									}
+									writer.write(fi_data);
+									sizeCached += fi_data.length;
+								}
+								recv_len -= fi_data.length;
 							}
 						}
-						writer.flush();
+						else {
+							fi_data = fi.filedata;
+							// use cache lock to ensure safely when modifying sizeCached
+							synchronized (cache_lock) {
+								// check that if there's enough space in cache to write
+								while (sizeCached + fi_data.length > cachesize) {
+									if (cache_evict() != 0)
+										System.out.println("[open] Error occured in eviction");
+								}
+								writer.write(fi_data);
+								sizeCached += fi_data.length;
+							}
+						}
 						writer.close();
+
+						LRU_cache.put(localPath, f);
+						if (cache_user_count.contains(localPath)) {
+							cache_user_count.put(localPath, cache_user_count.get(localPath) + 1);
+						}
+						else {
+							cache_user_count.put(localPath, 1);
+						}
 
 						// update the file-verID pair
 						// It's just put (rather than read and put) so it should be
 						// If multiple clients try to update same pair, the last will win
 						oriPath_verID.put(oriPath, remote_verID);
 					}
+					// if it's a directory and doesn't exist locally, make it
 					else {
-						// if it's a directory and doesn't exist locally, make it
 						if (!f.exists() && !f.mkdirs()) {
 							System.out.println("[open] Error: unable to make new directory in cache!");
 						};
@@ -518,13 +540,14 @@ class Proxy {
 						System.out.println("Local verID: " + local_verID + " (" + remote_verID + ")");
 						System.out.println("uploading of oriPath: " + oriPath);
 
+						// TODO: check if need chunking
 						byte buffer[] = new byte[(int) f.length()];
 						BufferedInputStream reader = new 
 						BufferedInputStream(new FileInputStream(f.getPath()));
 						reader.read(buffer, 0, buffer.length);
 						reader.close();
 
-						FileInfo fi = new FileInfo(oriPath, buffer, local_verID);
+						FileInfo fi = new FileInfo(oriPath, buffer, local_verID, false, f.length());
 						server.setFile(fi);
 
 						fd_raf.remove(fd);
