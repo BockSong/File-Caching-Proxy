@@ -29,7 +29,8 @@ class Proxy {
 
     private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
 								ConcurrentHashMap<String, Integer>();
-								
+	// maintain the status (if it's evictable) of every read copies
+	// One read copy is evictable with 0, and not for negative.
     private static ConcurrentHashMap<String, Integer> readerCount = new 
 								ConcurrentHashMap<String, Integer>();
 	// For every opened file, record Canonical Path - Relative Path
@@ -38,6 +39,11 @@ class Proxy {
 	
 	// only contains original version (without copies), since evicts only happen to ori file
 	private static Map<String, File> LRU_cache;
+	// maintain the status (if it's evictable) of every cache objects (original version)
+	// Add 1 right after opening before making copy, and minus 1 in close.
+	// One object is evictable with 0, and not for negative.
+	private static ConcurrentHashMap<String, Integer> cache_user_count = new 
+								ConcurrentHashMap<String, Integer>();
 
 	private static String cachedir;
 	private static int cachesize;
@@ -51,7 +57,8 @@ class Proxy {
 		cachedir = ca_dir;
 		sizeCached = 0;
 
-		LRU_cache = Collections.synchronizedMap(new LinkedHashMap<String, File>(cachesize, 0.9f, true));
+		LRU_cache = Collections.synchronizedMap(new 
+					LinkedHashMap<String, File>(cachesize, 0.9f, true));
 
 		// avail_fds: 0-1023
 		for (int i = 0; i< 1024; i++)
@@ -100,8 +107,11 @@ class Proxy {
 
 				// before writing, check that if there's enough space in cache
 				while (sizeCached + buffer.length > cachesize) {
-					if (cache_evict() != 0)
-						System.out.println("[open] Error occured in eviction");
+					System.out.println("Not enough. sizeCache: " + sizeCached + "; buf length:" + buffer.length);
+					if (cache_evict() != 0) {
+						System.out.println("[copy_file] Error occured in eviction");
+						System.exit(-1);
+					}
 				}
 
 				writer = new BufferedOutputStream(new FileOutputStream(desPath));
@@ -167,10 +177,11 @@ class Proxy {
 	}
 
 	/*
-	 * remove_copy: see if fd a write request. if yes, overwrite the original file with 
-	 * 				the copied version, and remove the copied version. if not, do nothing.
+	 * update_copy: This function called from close(). If fd is a write request, overwrite 
+	 * 				the original file with the copied version, and remove the copied version.
+	 * 				if reader, only remove copy when there's no other reader.
 	 */
-	private synchronized static void remove_copy( int fd ) {
+	private synchronized static void update_copy( int fd ) {
 		try {
 			File copyFile = fd_f.get(fd), oriFile;
 			String copyPath = copyFile.getPath();
@@ -192,7 +203,7 @@ class Proxy {
 					if (copyFile.length() != 0) {
 						sizeCached -= copyFile.length();
 						if (!copyFile.delete()) {
-							System.out.println("[rm_file_in_cache] Error: delete file failed from " + oriPath);
+							System.out.println("[update_copy] Error: delete file failed from " + oriPath);
 						}
 					}
 				}
@@ -204,7 +215,7 @@ class Proxy {
 			fd_f.put(fd, oriFile);
 			
 		} catch (Exception e) {
-            System.out.println("Error in remove: " + e.getMessage());
+            System.out.println("[update_copy] Error: " + e.getMessage());
             e.printStackTrace();
 		}
 	}
@@ -214,11 +225,13 @@ class Proxy {
 	 * return 0 on success. If cache is empty, return -1. If there's other error, return -2.
 	 */
 	private synchronized static int cache_evict() {
+		System.out.println("[cache_evict] Cache usage: " + sizeCached + "/" + cachesize);
+		// if cache is already empty, return an error
 		if (LRU_cache.size() == 0)
 			return -1;
 		try {
 			File f_evict;
-			String path_evict = "";
+			String path_evict = "";  // ensured to find the one to replace
 			Iterator iter = LRU_cache.entrySet().iterator();
 			Map.Entry entry;
 
@@ -226,16 +239,16 @@ class Proxy {
 			while (iter.hasNext()) {
 				entry = (Map.Entry) iter.next();
 				path_evict = entry.getKey().toString();
-				f_evict = new File(path_evict + cache_split);
 
-				// if the file is opened (has any copy), skip it
-				if ( !f_evict.isDirectory() || f_evict.list().length == 0 ) {
+				// check if the file is evictablt (is opened by anyone)
+				if (cache_user_count.get(path_evict) == 0) {
 					break;
 				}
 			}
 			f_evict = new File(path_evict);
 
 			synchronized (cache_lock) {
+				System.out.println("[cache_evict] Eviction: path: " + path_evict + "; length: " + f_evict.length());
 				sizeCached -= f_evict.length();
 
 				// remove it in LRU_cache
@@ -246,11 +259,23 @@ class Proxy {
 					System.out.println("[cache_evict] Error: delete file failed from " + path_evict);
 				}
 			}
+			System.out.println("[cache_evict] Cache usage: " + sizeCached + "/" + cachesize);
 			return 0;
 		} catch (Exception e) {
-            System.out.println("Error in cache_evict: " + e.getMessage());
+            System.out.println("[cache_evict] Error: " + e.getMessage());
 			e.printStackTrace();
 			return -2;
+		}
+	}
+
+	private static void print_cache() {
+		System.out.println("Cache usage: " + sizeCached + "/" + cachesize);
+		Iterator iter = LRU_cache.entrySet().iterator();
+
+		while (iter.hasNext()) {
+			Map.Entry entry = (Map.Entry) iter.next();
+			File f = new File(entry.getKey().toString());
+			System.out.println(entry.getKey() + ": " + f.length());
 		}
 	}
 
@@ -286,7 +311,7 @@ class Proxy {
 				// if it's already opened, use the same path format as the first one
 				if ( opened_path.containsKey(f.getCanonicalPath()) ) {
 					oriPath = opened_path.get(f.getCanonicalPath());
-					System.out.println("what you got: " + oriPath);
+					System.out.println("Transfer path to existing format: " + oriPath);
 					localPath = ori2localPath(oriPath);
 					f = new File(localPath);
 				}
@@ -350,12 +375,20 @@ class Proxy {
 								sizeCached += fi_data.length;
 
 								LRU_cache.put(localPath, f);
+
+								if (cache_user_count.contains(localPath)) {
+									cache_user_count.put(localPath, cache_user_count.get(localPath) + 1);
+								}
+								else {
+									cache_user_count.put(localPath, 1);
+								}
 							}
 							writer.flush();
 							writer.close();
 
 							// update the file-verID pair
-							// If multiple clients try to update same pair, shoule be last win
+							// It's just put (rather than read and put) so it should be
+							// If multiple clients try to update same pair, the last will win
 							oriPath_verID.put(oriPath, remote_verID);
 						}
 						else {
@@ -447,6 +480,7 @@ class Proxy {
 			}
 
 			System.out.println("OPEN call done from " + fd + " mode: " + mode);
+			print_cache();
 			System.out.println(" ");
 			return fd;
 		}
@@ -461,7 +495,7 @@ class Proxy {
 		public synchronized int close( int fd ) {
 			File f;
 			int local_verID, remote_verID;
-			String oriPath;
+			String oriPath, localPath;
 			RandomAccessFile raf;
 			System.out.println("--[CLOSE] called from " + fd);
 			if (!fd_raf.containsKey(fd))
@@ -469,16 +503,18 @@ class Proxy {
 
 			try {
 				// remove the copy if necessary
-				remove_copy(fd);
+				update_copy(fd);
 
 				f = fd_f.get(fd);
+				localPath = f.getPath();
 
-				oriPath = local2oriPath(f.getPath());
+				oriPath = local2oriPath(localPath);
 				local_verID = oriPath_verID.get(oriPath);
 				remote_verID = server.getVersionID(oriPath);
 				
 				// set f as the most recent one in LRU_cache (automatically done by LinkedHashmap)
-				System.out.println("File usage recorded: " + LRU_cache.get(oriPath));
+				LRU_cache.get(localPath);
+				System.out.println("File usage recorded: " + f.getPath());
 
 				// if f is a file and it's newer than server, then upload it to server
 				if (!f.isDirectory() && (local_verID > remote_verID)) {
@@ -503,16 +539,21 @@ class Proxy {
 				else {
 					System.out.println("Local file didn't change. ");
 				}
+
+				fd_f.remove(fd);
+				// Mark: move synchronized keyword to function
+				avail_fds.add(fd);
+	
+				// declare evictable
+				// Mark: implicit lock as function keyword && thread-safe type
+				cache_user_count.put(localPath, cache_user_count.get(localPath) - 1);
+
 			} catch (Exception e) {
-				System.out.println("Error in close: " + e.getMessage());
+				System.out.println("[close] Error: " + e.getMessage());
 				e.printStackTrace();
 			}
 
-			fd_f.remove(fd);
-
-			// Mark: move synchronized keyword to function
-			avail_fds.add(fd);
-
+			print_cache();
 			System.out.println(" ");
 			return 0;
 		}
@@ -565,10 +606,11 @@ class Proxy {
 			// update versionID
 			// Mark: move synchronized keyword to function
 			oriPath_verID.put(oriPath, oriPath_verID.get(oriPath) + 1);
-				
+			
 			System.out.println("file " + oriPath + "'s verID update to " + oriPath_verID.get(oriPath));
 
 			System.out.println("Write " + buf.length + " byte: " + buf);
+			print_cache();
 			System.out.println(" ");
 			return buf.length;
 		}
@@ -606,6 +648,7 @@ class Proxy {
 				read_len = 0;
 
 			System.out.println("Read " + read_len + " byte: " + buf);
+			print_cache();
 			System.out.println(" ");
 			return read_len;
 		}
@@ -657,6 +700,7 @@ class Proxy {
 			}
 
 			System.out.println("pos: " + pos);
+			print_cache();
 			System.out.println(" ");
 			return seek_loc;
 		}
@@ -683,23 +727,25 @@ class Proxy {
 					if (f.isFile() ) {
 						// clear cache but leave copies
 						synchronized (cache_lock) {
-							// remove the file in LRU_cache
-							LRU_cache.remove(localPath);
-		
 							sizeCached -= f.length();
 		
 							// delete the cache file
 							if (!f.delete()) {
 								System.out.println("[unlink] Error: delete file failed from " + localPath);
 							}
+
+							// remove the file in LRU_cache
+							LRU_cache.remove(localPath);
+							cache_user_count.remove(localPath);
 						}
 					}
 					// otherwise, unlink to directory is not permitted. So do thing for this case.
 				}
 			} catch (Exception e) {
-				System.out.println("Error in unlink: " + e.getMessage());
+				System.out.println("[unlink] Error: " + e.getMessage());
 				e.printStackTrace();
 			}
+			print_cache();
 			System.out.println(" ");
 			return rv;
 		}
