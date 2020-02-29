@@ -348,7 +348,6 @@ class Proxy {
 				}
 
 				if (update) {
-					System.out.println("downloading of path: " + oriPath);
 					FileInfo fi = server.getFile(oriPath);
 					// if it's a file, write it to local cache
 					if (fi.isFile) {
@@ -366,22 +365,22 @@ class Proxy {
 							long file_len = fi.length;
 							long recv_len = file_len;
 
-							// do chunking and send
-							while (recv_len > 0) {
-								fi = server.getChunk(oriPath, file_len - recv_len);
-								fi_data = fi.filedata;
-
-								// use cache lock to ensure safely when modifying sizeCached
-								synchronized (cache_lock) {
-									// check that if there's enough space in cache to write
-									while (sizeCached + fi_data.length > cachesize) {
-										if (cache_evict() != 0)
-											System.out.println("[open] Error occured in eviction");
-									}
-									writer.write(fi_data);
-									sizeCached += fi_data.length;
+							// use cache lock to ensure safely on use of sizeCached
+							synchronized (cache_lock) {
+								// check that if there's enough space in cache to write
+								while (sizeCached + file_len > cachesize) {
+									if (cache_evict() != 0)
+										System.out.println("[open] Error occured in eviction");
 								}
-								recv_len -= fi_data.length;
+								// do chunking and send
+								while (recv_len > 0) {
+									fi = server.getChunk(oriPath, file_len - recv_len);
+									fi_data = fi.filedata;
+
+									writer.write(fi_data);
+									recv_len -= fi_data.length;
+								}
+								sizeCached += file_len;
 							}
 						}
 						else {
@@ -398,6 +397,7 @@ class Proxy {
 							}
 						}
 						writer.close();
+						System.out.println("download successfully to: " + oriPath);
 
 						// update the file-verID pair
 						// It's just put (rather than read and put) so it should be
@@ -415,7 +415,7 @@ class Proxy {
 					System.out.println("[open] No need to download file. ");
 				}
 			} catch (Exception e) {
-				System.out.println("[open] Error in downloading: " + e.getMessage());
+				System.out.println("[open] Error: " + e.getMessage());
 				e.printStackTrace();
 			}
 
@@ -461,6 +461,14 @@ class Proxy {
 
 			// Cannot actually open a directory using RandomAccessFile
 			if (!f.isDirectory()) {
+				// maintain cache user counting (for eviction)
+				if (cache_user_count.contains(localPath)) {
+					cache_user_count.put(localPath, cache_user_count.get(localPath) + 1);
+				}
+				else {
+					cache_user_count.put(localPath, 1);
+				}
+
 				// make a new copy for reader or writer if needed
 				make_copy(fd, mode);
 				f = fd_f.get(fd);
@@ -474,14 +482,6 @@ class Proxy {
 					// add the pair if the file is just created
 					if (!oriPath_verID.containsKey(oriPath))
 						oriPath_verID.put(oriPath, 0);
-
-					// maintain cache user counting (for eviction)
-					if (cache_user_count.contains(localPath)) {
-						cache_user_count.put(localPath, cache_user_count.get(localPath) + 1);
-					}
-					else {
-						cache_user_count.put(localPath, 1);
-					}
 
 					// if it's read, # of readers add 1
 					if (mode == "r") {
@@ -549,7 +549,7 @@ class Proxy {
 					BufferedInputStream(new FileInputStream(f.getPath()));
 					FileInfo fi;
 
-					// TODO: check if need chunking
+					// check if need chunking
 					if (f.length() < MAX_LEN) {
 						// just send the whole file
 						byte buffer[] = new byte[(int) f.length()];
