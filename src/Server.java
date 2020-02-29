@@ -18,7 +18,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     // directory tree populated with the initial files and subdirectories to serve.
 	public static final int ENOENT = -2;
 	public static final int EISDIR = -21;
-	public static final int MAX_LEN = 4096000;
+	public static final int MAX_LEN = 10; //4096000;
     private static String rootdir;
     private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
                                 ConcurrentHashMap<String, Integer>();
@@ -98,6 +98,10 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
                 fi = new FileInfo(path, false, 0);
             }
             else {
+                // for the first time a file is requested, record its versionID
+                if (!oriPath_verID.containsKey(path)) {
+                    oriPath_verID.put(path, 0);
+                }
                 if (file.length() < MAX_LEN) {
                     // just send the whole file
                     byte buffer[] = new byte[(int) file.length()];
@@ -113,10 +117,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
                 else {
                     // send an empty fi indicating will be using chunking
                     fi = new FileInfo(path, true, file.length());
-                }
-                // for the first time a file is requested, record its versionID
-                if (!oriPath_verID.containsKey(path)) {
-                    oriPath_verID.put(path, 0);
                 }
             }
         } catch(Exception e) {

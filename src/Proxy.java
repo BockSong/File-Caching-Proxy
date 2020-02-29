@@ -14,7 +14,7 @@ class Proxy {
 
 	public static final int EIO = -5;
 	public static final int EACCES = -13;
-	public static final int MAX_LEN = 4096000;
+	public static final int MAX_LEN = 10; //4096000;
 
 	private static final String cache_split = "__cache/";
 	// About synchronization: having used synchronized keyword for func, so don't need to use 
@@ -274,7 +274,9 @@ class Proxy {
 		while (iter.hasNext()) {
 			Map.Entry entry = (Map.Entry) iter.next();
 			File f = new File(entry.getKey().toString());
-			System.out.println(entry.getKey() + ": " + f.length());
+			int num = cache_user_count.get(entry.getKey().toString());
+			System.out.println(entry.getKey() + " of " + f.length() + " with " 
+								+ num + " copies, approa " + (num + 1) * f.length() + " in total");
 		}
 	}
 
@@ -310,7 +312,7 @@ class Proxy {
 				// if it's already opened, use the same path format as the first one
 				if ( opened_path.containsKey(f.getCanonicalPath()) ) {
 					oriPath = opened_path.get(f.getCanonicalPath());
-					System.out.println("Transfer path to existing format: " + oriPath);
+					System.out.println("Find existing path format: " + oriPath);
 					localPath = ori2localPath(oriPath);
 					f = new File(localPath);
 				}
@@ -397,14 +399,6 @@ class Proxy {
 						}
 						writer.close();
 
-						LRU_cache.put(localPath, f);
-						if (cache_user_count.contains(localPath)) {
-							cache_user_count.put(localPath, cache_user_count.get(localPath) + 1);
-						}
-						else {
-							cache_user_count.put(localPath, 1);
-						}
-
 						// update the file-verID pair
 						// It's just put (rather than read and put) so it should be
 						// If multiple clients try to update same pair, the last will win
@@ -471,23 +465,34 @@ class Proxy {
 				make_copy(fd, mode);
 				f = fd_f.get(fd);
 
-				// if it's read, # of readers add 1
-				if (mode == "r") {
-					if (readerCount.contains(oriPath)) {
-						readerCount.put(oriPath, readerCount.get(oriPath) + 1);
-					}
-					else {
-						readerCount.put(oriPath, 1);
-					}
-				}
-	
 				try {
 					raf = new RandomAccessFile(f.getPath(), mode);
+
 					fd_raf.put(fd, raf);
+					LRU_cache.put(localPath, f);
 
 					// add the pair if the file is just created
 					if (!oriPath_verID.containsKey(oriPath))
 						oriPath_verID.put(oriPath, 0);
+
+					// maintain cache user counting (for eviction)
+					if (cache_user_count.contains(localPath)) {
+						cache_user_count.put(localPath, cache_user_count.get(localPath) + 1);
+					}
+					else {
+						cache_user_count.put(localPath, 1);
+					}
+
+					// if it's read, # of readers add 1
+					if (mode == "r") {
+						if (readerCount.contains(oriPath)) {
+							readerCount.put(oriPath, readerCount.get(oriPath) + 1);
+						}
+						else {
+							readerCount.put(oriPath, 1);
+						}
+					}
+
 				} catch (Exception e) {
 					System.out.println("throw IOException");
 					return EIO;
@@ -561,9 +566,10 @@ class Proxy {
 						// do chunking and send
 						long file_len = f.length();
 						long sent_len = 0;
-						long send = Math.min(MAX_LEN, file_len - sent_len);
+						long send;
 
 						while (sent_len < file_len) {
+							send = Math.min(MAX_LEN, file_len - sent_len);
 							byte buffer[] = new byte[(int) send];
 							reader.read(buffer, 0, buffer.length);
 
@@ -610,27 +616,29 @@ class Proxy {
 			String oriPath;
 			RandomAccessFile raf;
 			System.out.println("--[WRITE] called from " + fd);
-			if (!fd_f.containsKey(fd))
-				return Errors.EBADF;
-
-			f = fd_f.get(fd);
-			if (f.isDirectory())
-				return Errors.EISDIR;
-
-			raf = fd_raf.get(fd);
-
 			try {
-				// use lock to ensure safely on sizeCached
+				if (!fd_f.containsKey(fd))
+					return Errors.EBADF;
+	
+				f = fd_f.get(fd);
+				if (f.isDirectory())
+					return Errors.EISDIR;
+	
+				raf = fd_raf.get(fd);
+				long change = raf.getFilePointer() + buf.length - f.length();
+	
+				// use lock to ensure safely to unit operation on sizeCached
 				synchronized (cache_lock) {
+					sizeCached -= f.length();
 					// before writing, check that if there's enough space in cache
-					while (sizeCached + buf.length > cachesize) {
+					while (sizeCached + change > cachesize) {
 						if (cache_evict() != 0)
 							System.out.println("[open] Error occured in eviction");
 					}
 	
 					// local execution for write
 					raf.write(buf);
-					sizeCached += buf.length;
+					sizeCached += f.length();
 				}
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
