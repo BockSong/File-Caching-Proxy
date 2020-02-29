@@ -69,7 +69,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             reader.read(buffer);
             reader.close();
             fi = new FileInfo(path, buffer, oriPath_verID.get(path), true, file.length());
-
+            System.out.println("        file compressed " + send_len + " bytes with ID "
+                                                        + fi.versionID);
         } catch(Exception e) {
             System.out.println("[getChunk] Error: " + e.getMessage());
             e.printStackTrace();
@@ -85,44 +86,66 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
         String remotePath = getRemotepath(path);
         System.out.println("[getFile] remotePath: " + remotePath);
 
-        File file = new File(remotePath);
-        if (!file.exists()) {
-            // This branch shouldn't be executed until an error happens
-            System.out.println("[getFile] Error: this Dir/path doesn't exist ");
-            fi = null;
-        }
-        else if (!file.isFile()) {
-            System.out.println("        this is a directory. ");
-            fi = new FileInfo(path, false, 0);
-        }
-        else {
-            // for the first time a file is requested, record its versionID
-            if (!oriPath_verID.containsKey(path)) {
-                oriPath_verID.put(path, 0);
+        try {
+            File file = new File(remotePath);
+            if (!file.exists()) {
+                // This branch shouldn't be executed until an error happens
+                System.out.println("[getFile] Error: this Dir/path doesn't exist ");
+                fi = null;
             }
-            if (file.length() < MAX_LEN) {
-                // just send the whole file
-                byte buffer[] = new byte[(int) file.length()];
-                try {
+            else if (!file.isFile()) {
+                System.out.println("        this is a directory. ");
+                fi = new FileInfo(path, false, 0);
+            }
+            else {
+                if (file.length() < MAX_LEN) {
+                    // just send the whole file
+                    byte buffer[] = new byte[(int) file.length()];
                     BufferedInputStream reader = new
                     BufferedInputStream(new FileInputStream(remotePath));
                     reader.read(buffer, 0, buffer.length);
                     reader.close();
 
-                } catch(Exception e) {
-                    System.out.println("[getFile] Error: " + e.getMessage());
-                    e.printStackTrace();
+                    fi = new FileInfo(path, buffer, oriPath_verID.get(path), false, file.length());
+                    System.out.println("        file compressed successfully with ID "
+                                                                + oriPath_verID.get(path));
                 }
-                fi = new FileInfo(path, buffer, oriPath_verID.get(path), false, file.length());
-                System.out.println("        file compressed successfully with ID "
-                                                            + oriPath_verID.get(path));
+                else {
+                    // send an empty fi indicating will be using chunking
+                    fi = new FileInfo(path, true, file.length());
+                }
+                // for the first time a file is requested, record its versionID
+                if (!oriPath_verID.containsKey(path)) {
+                    oriPath_verID.put(path, 0);
+                }
             }
-            else {
-                // send an empty fi indicating will be using chunking
-                fi = new FileInfo(path, true, file.length());
-            }
+        } catch(Exception e) {
+            System.out.println("[getFile] Error: " + e.getMessage());
+            e.printStackTrace();
+            fi = null;
         }
         return fi;
+    }
+
+    // client call this to upload chunk
+    public synchronized void setChunk( FileInfo fi, long offset )
+            throws RemoteException {
+        try {
+            String remotePath = getRemotepath(fi.path);
+            byte[] fi_data = fi.filedata;
+            System.out.println("[setChunk] remotePath: " + remotePath);
+    
+            File file = new File(remotePath);
+			RandomAccessFile writer = new RandomAccessFile(remotePath, "rw");
+            writer.seek(offset);
+            writer.write(fi_data);
+            writer.close();
+            System.out.println("        file loaded " + fi_data.length + " bytes with ID "
+                                                        + fi.versionID);
+        } catch (Exception e) {
+            System.out.println("[setChunk] Error: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 
     // client call this to upload file
@@ -141,16 +164,20 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				System.out.println("[setFile] Error: unable to make new directory in cache!");
             };
             
-            BufferedOutputStream writer = new
-            BufferedOutputStream(new FileOutputStream(remotePath));
-            writer.write(fi_data, 0, fi_data.length);
-            writer.flush();
-            writer.close();
-
 			// update versionID once received the file
             oriPath_verID.put(fi.path, fi.versionID);
-            System.out.println("        file loaded successfully with ID "
-                                                        + fi.versionID);
+            System.out.println("        file loading with ID " + fi.versionID);
+
+            // if not chunking ,write it directly. otherwise write in setChunk()
+            if (!fi.isChunking) {
+                BufferedOutputStream writer = new
+                BufferedOutputStream(new FileOutputStream(remotePath));
+                writer.write(fi_data, 0, fi_data.length);
+                writer.flush();
+                writer.close();
+                System.out.println("        file loaded successfully with ID "
+                                                            + fi.versionID);
+            }
         } catch (Exception e) {
             System.out.println("[setFile] Error: " + e.getMessage());
             e.printStackTrace();

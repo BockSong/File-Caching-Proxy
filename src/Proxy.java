@@ -533,24 +533,47 @@ class Proxy {
 
 				// if f is a file and it's newer than server, then upload it to server
 				if (!f.isDirectory() && (local_verID > remote_verID)) {
-						raf = fd_raf.get(fd);
-						raf.close();
-						
-						// use RPC call to upload a file from cache
-						System.out.println("Local verID: " + local_verID + " (" + remote_verID + ")");
-						System.out.println("uploading of oriPath: " + oriPath);
+					raf = fd_raf.get(fd);
+					raf.close();
+					
+					// use RPC call to upload a file from cache
+					System.out.println("Local verID: " + local_verID + " (" + remote_verID + ")");
+					System.out.println("uploading of oriPath: " + oriPath);
+					
+					BufferedInputStream reader = new 
+					BufferedInputStream(new FileInputStream(f.getPath()));
+					FileInfo fi;
 
-						// TODO: check if need chunking
+					// TODO: check if need chunking
+					if (f.length() < MAX_LEN) {
+						// just send the whole file
 						byte buffer[] = new byte[(int) f.length()];
-						BufferedInputStream reader = new 
-						BufferedInputStream(new FileInputStream(f.getPath()));
 						reader.read(buffer, 0, buffer.length);
-						reader.close();
-
-						FileInfo fi = new FileInfo(oriPath, buffer, local_verID, false, f.length());
+	
+						fi = new FileInfo(oriPath, buffer, local_verID, false, f.length());
+						server.setFile(fi);
+					}
+					else {
+						// send an packet indicating will be using chunking
+						fi = new FileInfo(oriPath, true, f.length());
 						server.setFile(fi);
 
-						fd_raf.remove(fd);
+						// do chunking and send
+						long file_len = f.length();
+						long sent_len = 0;
+						long send = Math.min(MAX_LEN, file_len - sent_len);
+
+						while (sent_len < file_len) {
+							byte buffer[] = new byte[(int) send];
+							reader.read(buffer, 0, buffer.length);
+
+							fi = new FileInfo(oriPath, buffer, local_verID, false, f.length());
+							server.setChunk(fi, sent_len);
+							sent_len += send;
+						}
+					}
+					reader.close();
+					fd_raf.remove(fd);
 				}
 				else {
 					System.out.println("Local file didn't change. ");

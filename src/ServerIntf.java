@@ -14,6 +14,9 @@ public interface ServerIntf extends Remote {
              public FileInfo getFile( String path )
                            throws RemoteException;
 
+             public void setChunk( FileInfo f, long offset )
+                           throws RemoteException;
+
              public void setFile( FileInfo f )
                            throws RemoteException;
 
