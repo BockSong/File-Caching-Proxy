@@ -14,6 +14,7 @@ class Proxy {
 
 	public static final int EIO = -5;
 	public static final int EACCES = -13;
+	public static final int MAX_LEN = 4096000;
 
 	private static final String cache_split = "__cache/";
 	// About synchronization: having used synchronized keyword for func, so don't need to use 
@@ -38,7 +39,8 @@ class Proxy {
 								ConcurrentHashMap<String, String>();
 	
 	// only contains original version (without copies), since evicts only happen to ori file
-	private static Map<String, File> LRU_cache;
+	private static Map<String, File> LRU_cache = Collections.synchronizedMap(new 
+								LinkedHashMap<String, File>(16, 0.75f, true));
 	// maintain the status (if it's evictable) of every cache objects (original version)
 	// Add 1 right after opening before making copy, and minus 1 in close.
 	// One object is evictable with 0, and not for negative.
@@ -56,9 +58,6 @@ class Proxy {
 		cachesize = ca_size;
 		cachedir = ca_dir;
 		sizeCached = 0;
-
-		LRU_cache = Collections.synchronizedMap(new 
-					LinkedHashMap<String, File>(cachesize, 0.9f, true));
 
 		// avail_fds: 0-1023
 		for (int i = 0; i< 1024; i++)
@@ -349,57 +348,51 @@ class Proxy {
 				if (update) {
 					System.out.println("downloading of path: " + oriPath);
 					FileInfo fi = server.getFile(oriPath);
-					// Mark: in case somethig wrong; non-exist file shouldn't be transmitted
-					if (fi.exist) {
-						if (fi.isFile) {
-							// if it's a file, write it to local cache
-							byte[] fi_data = fi.filedata;
-							File Dir = new File(localPath.substring(0, localPath.lastIndexOf("/")) );
-							// If its directory doesn't exist, create it first
-							if ( !Dir.exists() && !Dir.mkdirs() ) {
-								System.out.println("[open] Error: unable to make new directory in cache!");
-							};
-							
-							BufferedOutputStream writer = new 
-							BufferedOutputStream(new FileOutputStream(localPath));
+					if (fi.isFile) {
+						// if it's a file, write it to local cache
+						byte[] fi_data = fi.filedata;
+						File Dir = new File(localPath.substring(0, localPath.lastIndexOf("/")) );
+						// If its directory doesn't exist, create it first
+						if ( !Dir.exists() && !Dir.mkdirs() ) {
+							System.out.println("[open] Error: unable to make new directory in cache!");
+						};
+						
+						BufferedOutputStream writer = new 
+						BufferedOutputStream(new FileOutputStream(localPath));
 
-							// use cache lock to ensure safely when modifying sizeCached
-							synchronized (cache_lock) {
-								// before writing, check that if there's enough space in cache
-								while (sizeCached + fi_data.length > cachesize) {
-									if (cache_evict() != 0)
-										System.out.println("[open] Error occured in eviction");
-								}
-
-								writer.write(fi_data, 0, fi_data.length);
-								sizeCached += fi_data.length;
-
-								LRU_cache.put(localPath, f);
-
-								if (cache_user_count.contains(localPath)) {
-									cache_user_count.put(localPath, cache_user_count.get(localPath) + 1);
-								}
-								else {
-									cache_user_count.put(localPath, 1);
-								}
+						// use cache lock to ensure safely when modifying sizeCached
+						synchronized (cache_lock) {
+							// before writing, check that if there's enough space in cache
+							while (sizeCached + fi_data.length > cachesize) {
+								if (cache_evict() != 0)
+									System.out.println("[open] Error occured in eviction");
 							}
-							writer.flush();
-							writer.close();
 
-							// update the file-verID pair
-							// It's just put (rather than read and put) so it should be
-							// If multiple clients try to update same pair, the last will win
-							oriPath_verID.put(oriPath, remote_verID);
+							writer.write(fi_data, 0, fi_data.length);
+							sizeCached += fi_data.length;
+
+							LRU_cache.put(localPath, f);
+
+							if (cache_user_count.contains(localPath)) {
+								cache_user_count.put(localPath, cache_user_count.get(localPath) + 1);
+							}
+							else {
+								cache_user_count.put(localPath, 1);
+							}
 						}
-						else {
-							// if it's a directory and doesn't exist locally, make it
-							if (!f.exists() && !f.mkdirs()) {
-								System.out.println("[open] Error: unable to make new directory in cache!");
-							};
-						}
+						writer.flush();
+						writer.close();
+
+						// update the file-verID pair
+						// It's just put (rather than read and put) so it should be
+						// If multiple clients try to update same pair, the last will win
+						oriPath_verID.put(oriPath, remote_verID);
 					}
 					else {
-						System.out.println("[open] Error: this directory does not exist remotely.");
+						// if it's a directory and doesn't exist locally, make it
+						if (!f.exists() && !f.mkdirs()) {
+							System.out.println("[open] Error: unable to make new directory in cache!");
+						};
 					}
 				}
 				else {

@@ -18,6 +18,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     // directory tree populated with the initial files and subdirectories to serve.
 	public static final int ENOENT = -2;
 	public static final int EISDIR = -21;
+	public static final int MAX_LEN = 4096000;
     private static String rootdir;
     private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
                                 ConcurrentHashMap<String, Integer>();
@@ -27,7 +28,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     }
 
     private String getRemotepath( String path ) {
-        // TODO: need to deal with corner case of path format in ck3
         return rootdir + "/" + path;
     }
 
@@ -63,12 +63,12 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
         File file = new File(remotePath);
         if (!file.exists()) {
             // This branch shouldn't be executed until an error happens
-            System.out.println("[Error] this Dir does not exist. ");
-            fi = new FileInfo(false, path);
+            System.out.println("[getFile] Error: this Dir/path doesn't exist ");
+            fi = null;
         }
         else if (!file.isFile()) {
             System.out.println("        this is a directory. ");
-            fi = new FileInfo(true, path);
+            fi = new FileInfo(path);
         }
         else {
             byte buffer[] = new byte[(int) file.length()];
