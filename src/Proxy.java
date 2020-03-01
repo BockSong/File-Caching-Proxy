@@ -14,21 +14,34 @@ class Proxy {
 
 	public static final int EIO = -5;
 	public static final int EACCES = -13;
-	public static final int MAX_LEN = 409600;
+	public static final int MAX_LEN = 819200;
 
 	private static final String cache_split = "__cache/";
 	// About synchronization: having used synchronized keyword for func, so don't need to use 
 	// lock (synchronized method) for synchronized data structure
 	private static List<Integer> avail_fds = 
 								Collections.synchronizedList(new ArrayList<Integer>());
-	// this is a compelte record of used fd and corresponding <file>
+	// this is a compelte record of used fd and corresponding file
 	private static ConcurrentHashMap<Integer, File> fd_f = new 
 								ConcurrentHashMap<Integer, File>();
 	// this map doesn't contains directories
 	private static ConcurrentHashMap<Integer, RandomAccessFile> fd_raf = new 
 								ConcurrentHashMap<Integer, RandomAccessFile>();
-
+	// this one is to record the permission mode of fd
+	private static ConcurrentHashMap<Integer, String> fd_mode = new 
+								ConcurrentHashMap<Integer, String>();
+	// this one is to record the versionID of a file
     private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
+								ConcurrentHashMap<String, Integer>();
+
+	// Cache Structure
+	// only contains original version (without copies), since evicts only happen to ori file
+	private static Map<String, File> LRU_cache = Collections.synchronizedMap(new 
+								LinkedHashMap<String, File>(16, 0.75f, true));
+	// maintain the status (if it's evictable) of every cache objects (original version)
+	// Add 1 right after opening before making copy, and minus 1 in close.
+	// One object is evictable with 0, and not for positive.
+	private static ConcurrentHashMap<String, Integer> cache_user_count = new 
 								ConcurrentHashMap<String, Integer>();
 	// maintain the status (if it's removeable) of every read copies
 	// One read copy is removeable with 0, and not for positive.
@@ -38,15 +51,6 @@ class Proxy {
 	private static ConcurrentHashMap<String, String> opened_path = new 
 								ConcurrentHashMap<String, String>();
 	
-	// only contains original version (without copies), since evicts only happen to ori file
-	private static Map<String, File> LRU_cache = Collections.synchronizedMap(new 
-								LinkedHashMap<String, File>(16, 0.75f, true));
-	// maintain the status (if it's evictable) of every cache objects (original version)
-	// Add 1 right after opening before making copy, and minus 1 in close.
-	// One object is evictable with 0, and not for positive.
-	private static ConcurrentHashMap<String, Integer> cache_user_count = new 
-								ConcurrentHashMap<String, Integer>();
-
 	private static String cachedir;
 	private static int cachesize;
 	private static int sizeCached;  // keep this lower than cachesize all the time
@@ -74,8 +78,8 @@ class Proxy {
 
 	private static String copyPath2localPath( String path ) {
 		String localPath = path.substring(0, path.lastIndexOf(cache_split));
-		System.out.println("[copyPath2localPath] copyPath: " + path);
-		System.out.println("[copyPath2localPath] localPath: " + localPath);
+		//System.out.println("[copyPath2localPath] copyPath: " + path);
+		//System.out.println("[copyPath2localPath] localPath: " + localPath);
 		return localPath;
 	}
 
@@ -150,11 +154,12 @@ class Proxy {
 	 * 			  first check if the copy already exist. If not, create it. All readers 
 	 * 			  share one copy.
 	 */
-	private synchronized static void make_copy( int fd, String mode ) {
+	private synchronized static void make_copy( int fd ) {
 		try {
 			File oriFile = fd_f.get(fd), copyFile;
 			String oriPath = oriFile.getPath();
 			String copyPath, fileName; 
+			String mode = fd_mode.get(fd);
 	
 			fileName = oriFile.getName();
 			File copyDir = new File(oriPath + cache_split);
@@ -201,37 +206,40 @@ class Proxy {
 	 */
 	private synchronized static void update_copy( int fd ) {
 		try {
-			File copyFile = fd_f.get(fd), oriFile;
+			File copyFile = fd_f.get(fd), localFile;
 			String copyPath = copyFile.getPath();
-			String oriPath = local2oriPath( copyPath2localPath(copyPath) );
+			String localPath = copyPath2localPath(copyPath);
+			String oriPath = local2oriPath(localPath);
+			String mode = fd_mode.get(fd);
 
-			if (readerCount.containsKey(oriPath)) {
+			if (mode == "r") {
 				// for read, decrease the # of reader
 				readerCount.put(oriPath, readerCount.get(oriPath) - 1);
 			}
 			else {
 				// for writer, overwrite the original file with the copy
-				copy_file(copyPath, oriPath);
+				copy_file(copyPath, localPath);
 			}
 
-			// except it's a read and there are still readers
-			if (!readerCount.containsKey(oriPath) || readerCount.get(oriPath) < 1) {
+			if (readerCount.getOrDefault(oriPath, 0) == 0) {
+				// except it's a read and there are still [other] readers, do nothing
 				// otherwise, remove the copy and clear counting
 				synchronized (cache_lock) {
 					if (copyFile.length() != 0) {
 						sizeCached -= copyFile.length();
 						if (!copyFile.delete()) {
-							System.out.println("[update_copy] Error: delete file failed from " + oriPath);
+							System.out.println("[update_copy] Error: delete file failed from " + 
+																					   copyPath);
 						}
 					}
 				}
-				System.out.println("[update_copy] copy removed of " + oriPath);
+				System.out.println("[update_copy] copy removed from " + copyPath);
 			}
 
 			// now redirect fd to the original file
-			oriFile = new File(oriPath);
+			localFile = new File(localPath);
 			fd_f.remove(fd);
-			fd_f.put(fd, oriFile);
+			fd_f.put(fd, localFile);
 			
 		} catch (Exception e) {
             System.out.println("[update_copy] Error: " + e.getMessage());
@@ -308,8 +316,9 @@ class Proxy {
 
 		while (iter.hasNext()) {
 			Map.Entry entry = (Map.Entry) iter.next();
-			System.out.println(entry.getKey() + " has " + entry.getValue() + " readers");
+			System.out.print(entry.getKey() + ":" + entry.getValue() + ", ");
 		}
+		System.out.println(" ");
 	}
 
 	private static class FileHandler implements FileHandling {
@@ -493,6 +502,7 @@ class Proxy {
 			avail_fds.remove(0);
 
 			fd_f.put(fd, f);
+			fd_mode.put(fd, mode);
 
 			// Cannot actually open a directory using RandomAccessFile
 			if (!f.isDirectory()) {
@@ -500,7 +510,7 @@ class Proxy {
 				cache_user_count.put(localPath, cache_user_count.getOrDefault(localPath, 0) + 1);
 
 				// make a new copy for reader or writer if needed
-				make_copy(fd, mode);
+				make_copy(fd);
 				f = fd_f.get(fd);
 
 				try {
@@ -551,15 +561,15 @@ class Proxy {
 				update_copy(fd);
 
 				f = fd_f.get(fd);
-				oriPath = f.getPath();
+				localPath = f.getPath();
 
-				localPath = ori2localPath(oriPath);
+				oriPath = local2oriPath(localPath);
 				local_verID = oriPath_verID.get(oriPath);
 				remote_verID = server.getVersionID(oriPath);
 				
 				// set f as the most recent one in LRU_cache (automatically done by LinkedHashmap)
 				LRU_cache.get(localPath);
-				System.out.println("File usage recorded: " + f.getPath());
+				System.out.println("File usage recorded: " + localPath);
 
 				// if f is a file and it's newer than server, then upload it to server
 				if (!f.isDirectory() && (local_verID > remote_verID)) {
@@ -571,7 +581,7 @@ class Proxy {
 					System.out.println("uploading of oriPath: " + oriPath);
 					
 					BufferedInputStream reader = new 
-					BufferedInputStream(new FileInputStream(f.getPath()));
+					BufferedInputStream(new FileInputStream(localPath));
 					FileInfo fi;
 
 					// check if need chunking
@@ -611,11 +621,12 @@ class Proxy {
 				}
 
 				fd_f.remove(fd);
+				fd_mode.remove(fd);
 				// Mark: move synchronized keyword to function
 				avail_fds.add(fd);
 	
-				// declare evictable
 				// Mark: implicit lock as function keyword && thread-safe type
+				// update # of cache object users
 				cache_user_count.put(localPath, cache_user_count.get(localPath) - 1);
 
 			} catch (Exception e) {
@@ -638,7 +649,7 @@ class Proxy {
 		 */  
 		public synchronized long write( int fd, byte[] buf ) {
 			File f;
-			String oriPath;
+			String oriPath, mode;
 			RandomAccessFile raf;
 			System.out.println("--[WRITE] called from " + fd);
 			try {
@@ -649,6 +660,10 @@ class Proxy {
 				if (f.isDirectory())
 					return Errors.EISDIR;
 	
+				mode = fd_mode.get(fd);
+				if (mode == "r")
+					return Errors.EBADF;
+
 				raf = fd_raf.get(fd);
 				long change = raf.getFilePointer() + buf.length - f.length();
 	
@@ -669,10 +684,6 @@ class Proxy {
 				}
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
-				// r/w permissions can be accessed from readersCount
-				// while we can also catch permission error here
-				if (e instanceof IOException)
-					return Errors.EBADF;
 				return EIO;
 			}
 
@@ -809,15 +820,21 @@ class Proxy {
 																					localPath);
 							}
 
-							// keep it in cache only if there's any opened writers. (this case is 
-							// equal to a create_new.) if there's only opened reader, we can remove
-							// it since there's no need to keep (it's not evictable until automati-
-							// clly removed in close() later).
-							// if it's not opened by anyone, just remove
-							if ((cache_user_count.getOrDefault(localPath, 0) - 
-									 readerCount.getOrDefault(localPath, 0)) > 0) {
+							/* 
+							 * keep the cache only when there's any opened writers (this case is 
+							 * equal to a create_new). if there's only opened reader, we can remove
+							 * it since there's no need to keep it (it's not evictable until autom-
+							 * atically removed in the later close call).
+							 * if it's not opened by anyone, just remove
+							 */
+
+							// check if the # of writers > 0
+							if (!( (cache_user_count.getOrDefault(localPath, 0) > 0) &&
+								(cache_user_count.getOrDefault(localPath, 0) > 
+									 readerCount.getOrDefault(localPath, 0))) ) {
 								LRU_cache.remove(localPath);
 							}
+
 							// if there's opening fd and cache_user_count, left them for close() to
 							// deal with
 						}
