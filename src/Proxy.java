@@ -803,12 +803,19 @@ class Proxy {
 		
 							// delete the cache file
 							if (!f.delete()) {
-								System.out.println("[unlink] Error: delete file failed from " + localPath);
+								System.out.println("[unlink] Error: delete file failed from " + 
+																					localPath);
 							}
 
-							// remove the file in LRU_cache
-							LRU_cache.remove(localPath);
-							cache_user_count.remove(localPath);
+							// keep user count if there's opened writers. (this case is equal to a create_new)
+							// if there's opened reader, remove them in caching since there's no need to 
+							// manage it (not evictable until automaticlly removed in close())
+							// if it's not opened, just remove
+							if (!cache_user_count.containsKey(localPath) || readerCount.containsKey(localPath)) {
+								LRU_cache.remove(localPath);
+								cache_user_count.remove(localPath);
+								// for opened reader, left its fd for close() to deal with
+							}
 						}
 					}
 					// otherwise, unlink to directory is not permitted. So do thing for this case.
