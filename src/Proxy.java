@@ -14,7 +14,7 @@ class Proxy {
 
 	public static final int EIO = -5;
 	public static final int EACCES = -13;
-	public static final int MAX_LEN = 4096000;
+	public static final int MAX_LEN = 409600;
 
 	private static final String cache_split = "__cache/";
 	// About synchronization: having used synchronized keyword for func, so don't need to use 
@@ -72,11 +72,11 @@ class Proxy {
 		return path.substring(cachedir.length() + 1);
 	}
 
-	private static String copyPath2oriPath( String path ) {
-		String oriPath = path.substring(0, path.lastIndexOf(cache_split));
-		System.out.println("[copyPath2oriPath] copyPath: " + path);
-		System.out.println("[copyPath2oriPath] oriPath: " + oriPath);
-		return oriPath;
+	private static String copyPath2localPath( String path ) {
+		String localPath = path.substring(0, path.lastIndexOf(cache_split));
+		System.out.println("[copyPath2localPath] copyPath: " + path);
+		System.out.println("[copyPath2localPath] localPath: " + localPath);
+		return localPath;
 	}
 
 	/*
@@ -203,7 +203,7 @@ class Proxy {
 		try {
 			File copyFile = fd_f.get(fd), oriFile;
 			String copyPath = copyFile.getPath();
-			String oriPath = copyPath2oriPath(copyPath);
+			String oriPath = local2oriPath( copyPath2localPath(copyPath) );
 
 			if (readerCount.containsKey(oriPath)) {
 				// for read, decrease the # of reader
@@ -225,6 +225,7 @@ class Proxy {
 						}
 					}
 				}
+				System.out.println("[update_copy] copy removed of " + oriPath);
 			}
 
 			// now redirect fd to the original file
@@ -286,6 +287,10 @@ class Proxy {
 		}
 	}
 
+	/*
+	 * print_cache: print cache and reader counting.
+	 * For debugging use.
+	 */
 	private static void print_cache() {
 		System.out.println("Cache usage: " + sizeCached + "/" + cachesize);
 		Iterator iter = LRU_cache.entrySet().iterator();
@@ -296,6 +301,14 @@ class Proxy {
 			int num = cache_user_count.get(entry.getKey().toString());
 			System.out.println(entry.getKey() + " of " + f.length() + " with " 
 								+ num + " copies, approa " + (num + 1) * f.length() + " in total");
+		}
+
+		System.out.println("(readerCount) ");
+		iter = readerCount.entrySet().iterator();
+
+		while (iter.hasNext()) {
+			Map.Entry entry = (Map.Entry) iter.next();
+			System.out.println(entry.getKey() + " has " + entry.getValue() + " readers");
 		}
 	}
 
@@ -423,7 +436,6 @@ class Proxy {
 						System.out.println("download successfully to: " + oriPath);
 
 						// update the file-verID pair
-						// It's just put (rather than read and put) so it should be
 						// If multiple clients try to update same pair, the last will win
 						oriPath_verID.put(oriPath, remote_verID);
 					}
@@ -485,12 +497,7 @@ class Proxy {
 			// Cannot actually open a directory using RandomAccessFile
 			if (!f.isDirectory()) {
 				// maintain cache user counting (for eviction)
-				if (cache_user_count.containsKey(localPath)) {
-					cache_user_count.put(localPath, cache_user_count.get(localPath) + 1);
-				}
-				else {
-					cache_user_count.put(localPath, 1);
-				}
+				cache_user_count.put(localPath, cache_user_count.getOrDefault(localPath, 0) + 1);
 
 				// make a new copy for reader or writer if needed
 				make_copy(fd, mode);
@@ -508,12 +515,7 @@ class Proxy {
 
 					// if it's read, # of readers add 1
 					if (mode == "r") {
-						if (readerCount.containsKey(oriPath)) {
-							readerCount.put(oriPath, readerCount.get(oriPath) + 1);
-						}
-						else {
-							readerCount.put(oriPath, 1);
-						}
+						readerCount.put(oriPath, readerCount.getOrDefault(oriPath, 0) + 1);
 					}
 
 				} catch (Exception e) {
@@ -549,9 +551,9 @@ class Proxy {
 				update_copy(fd);
 
 				f = fd_f.get(fd);
-				localPath = f.getPath();
+				oriPath = f.getPath();
 
-				oriPath = local2oriPath(localPath);
+				localPath = ori2localPath(oriPath);
 				local_verID = oriPath_verID.get(oriPath);
 				remote_verID = server.getVersionID(oriPath);
 				
@@ -674,7 +676,7 @@ class Proxy {
 				return EIO;
 			}
 
-			oriPath = local2oriPath( copyPath2oriPath(f.getPath()) );
+			oriPath = local2oriPath( copyPath2localPath(f.getPath()) );
 			// update versionID
 			// Mark: move synchronized keyword to function
 			oriPath_verID.put(oriPath, oriPath_verID.get(oriPath) + 1);
@@ -807,15 +809,17 @@ class Proxy {
 																					localPath);
 							}
 
-							// keep user count if there's opened writers. (this case is equal to a create_new)
-							// if there's opened reader, remove them in caching since there's no need to 
-							// manage it (not evictable until automaticlly removed in close())
-							// if it's not opened, just remove
-							if (!cache_user_count.containsKey(localPath) || readerCount.containsKey(localPath)) {
+							// keep it in cache only if there's any opened writers. (this case is 
+							// equal to a create_new.) if there's only opened reader, we can remove
+							// it since there's no need to keep (it's not evictable until automati-
+							// clly removed in close() later).
+							// if it's not opened by anyone, just remove
+							if ((cache_user_count.getOrDefault(localPath, 0) - 
+									 readerCount.getOrDefault(localPath, 0)) > 0) {
 								LRU_cache.remove(localPath);
-								cache_user_count.remove(localPath);
-								// for opened reader, left its fd for close() to deal with
 							}
+							// if there's opening fd and cache_user_count, left them for close() to
+							// deal with
 						}
 					}
 					// otherwise, unlink to directory is not permitted. So do thing for this case.
