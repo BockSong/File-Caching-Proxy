@@ -152,7 +152,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     public synchronized void setFile( FileInfo fi )
             throws RemoteException {
         try {
-            // TODO: check if need chunking
             String remotePath = getRemotepath(fi.path);
             byte[] fi_data = fi.filedata;
             System.out.println("[setFile] remotePath: " + remotePath);

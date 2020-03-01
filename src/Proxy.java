@@ -30,8 +30,8 @@ class Proxy {
 
     private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
 								ConcurrentHashMap<String, Integer>();
-	// maintain the status (if it's evictable) of every read copies
-	// One read copy is evictable with 0, and not for negative.
+	// maintain the status (if it's removeable) of every read copies
+	// One read copy is removeable with 0, and not for positive.
     private static ConcurrentHashMap<String, Integer> readerCount = new 
 								ConcurrentHashMap<String, Integer>();
 	// For every opened file, record Canonical Path - Relative Path
@@ -43,7 +43,7 @@ class Proxy {
 								LinkedHashMap<String, File>(16, 0.75f, true));
 	// maintain the status (if it's evictable) of every cache objects (original version)
 	// Add 1 right after opening before making copy, and minus 1 in close.
-	// One object is evictable with 0, and not for negative.
+	// One object is evictable with 0, and not for positive.
 	private static ConcurrentHashMap<String, Integer> cache_user_count = new 
 								ConcurrentHashMap<String, Integer>();
 
@@ -205,7 +205,7 @@ class Proxy {
 			String copyPath = copyFile.getPath();
 			String oriPath = copyPath2oriPath(copyPath);
 
-			if (readerCount.contains(oriPath)) {
+			if (readerCount.containsKey(oriPath)) {
 				// for read, decrease the # of reader
 				readerCount.put(oriPath, readerCount.get(oriPath) - 1);
 			}
@@ -215,7 +215,7 @@ class Proxy {
 			}
 
 			// except it's a read and there are still readers
-			if (!readerCount.contains(oriPath) || readerCount.get(oriPath) < 1) {
+			if (!readerCount.containsKey(oriPath) || readerCount.get(oriPath) < 1) {
 				// otherwise, remove the copy and clear counting
 				synchronized (cache_lock) {
 					if (copyFile.length() != 0) {
@@ -485,7 +485,7 @@ class Proxy {
 			// Cannot actually open a directory using RandomAccessFile
 			if (!f.isDirectory()) {
 				// maintain cache user counting (for eviction)
-				if (cache_user_count.contains(localPath)) {
+				if (cache_user_count.containsKey(localPath)) {
 					cache_user_count.put(localPath, cache_user_count.get(localPath) + 1);
 				}
 				else {
@@ -508,7 +508,7 @@ class Proxy {
 
 					// if it's read, # of readers add 1
 					if (mode == "r") {
-						if (readerCount.contains(oriPath)) {
+						if (readerCount.containsKey(oriPath)) {
 							readerCount.put(oriPath, readerCount.get(oriPath) + 1);
 						}
 						else {
