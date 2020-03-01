@@ -86,12 +86,10 @@ class Proxy {
 	private synchronized static void copy_file( String srcPath, String desPath ) {
 		try {
 			File srcFile = new File(srcPath);
-			byte buffer[] = new byte[(int) srcFile.length()];
-			BufferedOutputStream writer;
-			BufferedInputStream reader = new
-			BufferedInputStream(new FileInputStream(srcPath));
-			reader.read(buffer, 0, buffer.length);
-			reader.close();
+			long file_len = srcFile.length();
+			BufferedInputStream reader = new 
+					BufferedInputStream(new FileInputStream(srcPath));
+			RandomAccessFile writer;
 
 			// use cache lock to ensure safely when modifying sizeCached
 			synchronized (cache_lock) {
@@ -100,25 +98,46 @@ class Proxy {
 				if (desFile.length() != 0) {
 					sizeCached -= desFile.length();
 					if (!desFile.delete()) {
-						System.out.println("[copy_file_in_cache] Error: delete file failed from " + desPath);
+						System.out.println("[copy_file] Error: delete file failed from "
+																			+ desPath);
 					}
 				}
-
 				// before writing, check that if there's enough space in cache
-				while (sizeCached + buffer.length > cachesize) {
-					System.out.println("Not enough. sizeCache: " + sizeCached + "; buf length:" + buffer.length);
+				while (sizeCached + file_len > cachesize) {
+					System.out.println("Not enough. sizeCache: " + sizeCached + 
+														"; file_len:" + file_len);
 					if (cache_evict() != 0) {
 						System.out.println("[copy_file] Error occured in eviction");
 						System.exit(-1);
 					}
 				}
+				writer = new RandomAccessFile(desPath, "rw");
 
-				writer = new BufferedOutputStream(new FileOutputStream(desPath));
-				writer.write(buffer, 0, buffer.length);
-				sizeCached += buffer.length;
+				if (file_len < MAX_LEN) {
+					byte buffer[] = new byte[(int) srcFile.length()];
+					reader.read(buffer, 0, buffer.length);
+					writer.write(buffer);
+				}
+				else {
+					// do chunking and copy
+					long sent_len = 0;
+					long send;
+
+					while (sent_len < file_len) {
+						send = Math.min(MAX_LEN, file_len - sent_len);
+						byte buffer[] = new byte[(int) send];
+						reader.read(buffer, 0, buffer.length);
+						writer.write(buffer);
+						sent_len += send;
+						System.out.println("[copy_file] copied " + send + " bytes to " + desPath);
+					}
+				}
+				sizeCached += file_len;
 			}
-			writer.flush();
+			reader.close();
 			writer.close();
+			System.out.println("[copy_file] copy successfully, " + file_len + " bytes in total.");
+
 		} catch (Exception e) {
 			System.out.println("Error in copy_file: " + e.getMessage());
 			e.printStackTrace();
@@ -369,6 +388,8 @@ class Proxy {
 							synchronized (cache_lock) {
 								// check that if there's enough space in cache to write
 								while (sizeCached + file_len > cachesize) {
+									System.out.println("Not enough. sizeCache: " + sizeCached 
+																	+ "; file_len:" + file_len);
 									if (cache_evict() != 0)
 										System.out.println("[open] Error occured in eviction");
 								}
@@ -389,6 +410,8 @@ class Proxy {
 							synchronized (cache_lock) {
 								// check that if there's enough space in cache to write
 								while (sizeCached + fi_data.length > cachesize) {
+									System.out.println("Not enough. sizeCache: " + sizeCached 
+																	+ "; file_len:" + fi_data.length);
 									if (cache_evict() != 0)
 										System.out.println("[open] Error occured in eviction");
 								}
@@ -632,6 +655,8 @@ class Proxy {
 					sizeCached -= f.length();
 					// before writing, check that if there's enough space in cache
 					while (sizeCached + change > cachesize) {
+						System.out.println("Not enough. sizeCache: " + sizeCached 
+													+ "; file change:" + change);
 						if (cache_evict() != 0)
 							System.out.println("[open] Error occured in eviction");
 					}
