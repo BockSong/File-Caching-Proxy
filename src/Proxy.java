@@ -14,7 +14,7 @@ class Proxy {
 
 	public static final int EIO = -5;
 	public static final int EACCES = -13;
-	public static final int MAX_LEN = 10; //4096000;
+	public static final int MAX_LEN = 4096000;
 
 	private static final String cache_split = "__cache/";
 	// About synchronization: having used synchronized keyword for func, so don't need to use 
@@ -377,22 +377,33 @@ class Proxy {
 						};
 						
 						byte[] fi_data;
-						RandomAccessFile writer = new RandomAccessFile(localPath, "rw");
+						RandomAccessFile writer;
 
-						// if it's single file, receive it directly; otherwise call getChunk
-						if (fi.isChunking) {
-							long file_len = fi.length;
-							long recv_len = file_len;
-
-							// use cache lock to ensure safely on use of sizeCached
-							synchronized (cache_lock) {
-								// check that if there's enough space in cache to write
-								while (sizeCached + file_len > cachesize) {
-									System.out.println("Not enough. sizeCache: " + sizeCached 
-																	+ "; file_len:" + file_len);
-									if (cache_evict() != 0)
-										System.out.println("[open] Error occured in eviction");
+						// use cache lock to ensure safely on use of sizeCached
+						synchronized (cache_lock) {
+							// first clear original file and cache counting if it is not empty
+							if (f.exists() && f.isFile() && (f.length() != 0)) {
+								sizeCached -= f.length();
+								if (!f.delete()) {
+									System.out.println("[copy_file] Error: delete file failed from "
+																					   + localPath);
 								}
+							}
+							long file_len = fi.length;
+							writer = new RandomAccessFile(localPath, "rw");
+							
+							// check that if there's enough space in cache to write
+							while (sizeCached + file_len > cachesize) {
+								System.out.println("Not enough. sizeCache: " + sizeCached 
+																+ "; file_len:" + file_len);
+								if (cache_evict() != 0)
+									System.out.println("[open] Error occured in eviction");
+							}
+	
+							// if it's single file, receive it directly; otherwise call getChunk
+							if (fi.isChunking) {
+								long recv_len = file_len;
+
 								// do chunking and send
 								while (recv_len > 0) {
 									fi = server.getChunk(oriPath, file_len - recv_len);
@@ -401,23 +412,12 @@ class Proxy {
 									writer.write(fi_data);
 									recv_len -= fi_data.length;
 								}
-								sizeCached += file_len;
 							}
-						}
-						else {
-							fi_data = fi.filedata;
-							// use cache lock to ensure safely when modifying sizeCached
-							synchronized (cache_lock) {
-								// check that if there's enough space in cache to write
-								while (sizeCached + fi_data.length > cachesize) {
-									System.out.println("Not enough. sizeCache: " + sizeCached 
-																	+ "; file_len:" + fi_data.length);
-									if (cache_evict() != 0)
-										System.out.println("[open] Error occured in eviction");
-								}
+							else {
+								fi_data = fi.filedata;
 								writer.write(fi_data);
-								sizeCached += fi_data.length;
 							}
+							sizeCached += file_len;
 						}
 						writer.close();
 						System.out.println("download successfully to: " + oriPath);

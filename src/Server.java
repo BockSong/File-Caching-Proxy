@@ -18,7 +18,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     // directory tree populated with the initial files and subdirectories to serve.
 	public static final int ENOENT = -2;
 	public static final int EISDIR = -21;
-	public static final int MAX_LEN = 10; //4096000;
+	public static final int MAX_LEN = 4096000;
     private static String rootdir;
     private static ConcurrentHashMap<String, Integer> oriPath_verID = new 
                                 ConcurrentHashMap<String, Integer>();
