@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.concurrent.*;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 class Proxy {
 
@@ -51,6 +52,9 @@ class Proxy {
 	private static ConcurrentHashMap<String, String> opened_path = new 
 								ConcurrentHashMap<String, String>();
 	
+	private static ConcurrentHashMap<String, ReentrantReadWriteLock> file_lock = new 
+								ConcurrentHashMap<String, ReentrantReadWriteLock>();
+
 	private static String cachedir;
 	private static int cachesize;
 	private static int sizeCached;  // keep this lower than cachesize all the time
@@ -94,6 +98,16 @@ class Proxy {
 			BufferedInputStream reader = new 
 					BufferedInputStream(new FileInputStream(srcPath));
 			RandomAccessFile writer;
+
+			if (!file_lock.containsKey(srcPath)) {
+				file_lock.put(srcPath, new ReentrantReadWriteLock());
+			}
+			file_lock.get(srcPath).readLock().lock();
+
+			if (!file_lock.containsKey(desPath)) {
+				file_lock.put(desPath, new ReentrantReadWriteLock());
+			}
+			file_lock.get(desPath).writeLock().lock();
 
 			// use cache lock to ensure safely when modifying sizeCached
 			synchronized (cache_lock) {
@@ -145,6 +159,9 @@ class Proxy {
 		} catch (Exception e) {
 			System.out.println("Error in copy_file: " + e.getMessage());
 			e.printStackTrace();
+		} finally {
+			file_lock.get(srcPath).readLock().unlock();
+			file_lock.get(desPath).writeLock().unlock();
 		}
 	}
 
@@ -408,6 +425,11 @@ class Proxy {
 						byte[] fi_data;
 						RandomAccessFile writer;
 
+						if (!file_lock.containsKey(localPath)) {
+							file_lock.put(localPath, new ReentrantReadWriteLock());
+						}
+						file_lock.get(localPath).writeLock().lock();
+			
 						// use cache lock to ensure safely on use of sizeCached
 						synchronized (cache_lock) {
 							// first clear original file and cache counting if it is not empty
@@ -450,6 +472,8 @@ class Proxy {
 						}
 						writer.close();
 						System.out.println("download successfully to: " + oriPath);
+
+						file_lock.get(localPath).writeLock().unlock();
 
 						// update the file-verID pair
 						// If multiple clients try to update same pair, the last will win
@@ -587,6 +611,11 @@ class Proxy {
 					System.out.println("Local verID: " + local_verID + " (" + remote_verID + ")");
 					System.out.println("uploading of oriPath: " + oriPath);
 					
+					if (!file_lock.containsKey(localPath)) {
+						file_lock.put(localPath, new ReentrantReadWriteLock());
+					}
+					file_lock.get(localPath).readLock().lock();
+
 					BufferedInputStream reader = new 
 					BufferedInputStream(new FileInputStream(localPath));
 					FileInfo fi;
@@ -622,6 +651,7 @@ class Proxy {
 					}
 					reader.close();
 					fd_raf.remove(fd);
+					file_lock.get(localPath).readLock().unlock();
 				}
 				else {
 					System.out.println("Local file didn't change. ");
@@ -655,10 +685,11 @@ class Proxy {
 		 * the error.
 		 */  
 		public synchronized long write( int fd, byte[] buf ) {
-			File f;
+			File f = null;
 			String oriPath, mode;
 			RandomAccessFile raf;
 			System.out.println("--[WRITE] called from " + fd);
+
 			try {
 				if (!fd_f.containsKey(fd))
 					return Errors.EBADF;
@@ -673,6 +704,11 @@ class Proxy {
 
 				raf = fd_raf.get(fd);
 				long change = raf.getFilePointer() + buf.length - f.length();
+	
+				if (!file_lock.containsKey(f.getPath())) {
+					file_lock.put(f.getPath(), new ReentrantReadWriteLock());
+				}
+				file_lock.get(f.getPath()).writeLock().lock();
 	
 				// use lock to ensure safely to unit operation on sizeCached
 				synchronized (cache_lock) {
@@ -692,6 +728,8 @@ class Proxy {
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
 				return EIO;
+			} finally {
+				file_lock.get(f.getPath()).writeLock().unlock();
 			}
 
 			oriPath = local2oriPath( copyPath2localPath(f.getPath()) );
@@ -729,13 +767,21 @@ class Proxy {
 
 			raf = fd_raf.get(fd);
 
+			if (!file_lock.containsKey(f.getPath())) {
+				file_lock.put(f.getPath(), new ReentrantReadWriteLock());
+			}
+			file_lock.get(f.getPath()).readLock().lock();
+
 			try {
 				// just local execution
 				read_len = raf.read(buf);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
 				return EIO;
+			} finally {
+				file_lock.get(f.getPath()).readLock().unlock();
 			}
+			
 			if (read_len == -1)
 				read_len = 0;
 
