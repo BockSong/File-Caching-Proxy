@@ -300,25 +300,32 @@ class Proxy {
 	 * For debugging use.
 	 */
 	private static void print_cache() {
-		System.out.println("Cache usage: " + sizeCached + "/" + cachesize);
-		Iterator iter = LRU_cache.entrySet().iterator();
-
-		while (iter.hasNext()) {
-			Map.Entry entry = (Map.Entry) iter.next();
-			File f = new File(entry.getKey().toString());
-			int num = cache_user_count.get(entry.getKey().toString());
-			System.out.println(entry.getKey() + " of " + f.length() + " with " 
-								+ num + " copies, approa " + (num + 1) * f.length() + " in total");
-		}
-
-		System.out.println("(readerCount) ");
-		iter = readerCount.entrySet().iterator();
+		System.out.print("(readerCount: ");
+		Iterator iter = readerCount.entrySet().iterator();
 
 		while (iter.hasNext()) {
 			Map.Entry entry = (Map.Entry) iter.next();
 			System.out.print(entry.getKey() + ":" + entry.getValue() + ", ");
 		}
-		System.out.println(" ");
+		System.out.println(")");
+
+		System.out.println("Cache usage: " + sizeCached + "/" + cachesize);
+		iter = LRU_cache.entrySet().iterator();
+
+		while (iter.hasNext()) {
+			Map.Entry entry = (Map.Entry) iter.next();
+			File f = new File(entry.getKey().toString());
+			int num = cache_user_count.get(entry.getKey().toString());
+			int reader_num = readerCount.getOrDefault(local2oriPath(f.getPath()), 0);
+			int copy_num;
+			if (reader_num != 0)
+				copy_num = num - reader_num + 1;
+			else
+				copy_num = num;
+			System.out.println(entry.getKey() + " of " + f.length() + " with " 
+							   + num + " users and " + copy_num + " copies, approa " + 
+							   (copy_num + 1) * f.length() + " in total");
+		}
 	}
 
 	private static class FileHandler implements FileHandling {
@@ -595,7 +602,7 @@ class Proxy {
 					}
 					else {
 						// send an packet indicating will be using chunking
-						fi = new FileInfo(oriPath, true, f.length());
+						fi = new FileInfo(oriPath, true, f.length(), local_verID);
 						server.setFile(fi);
 
 						// do chunking and send
@@ -688,12 +695,12 @@ class Proxy {
 			}
 
 			oriPath = local2oriPath( copyPath2localPath(f.getPath()) );
-			// update versionID
+			
 			// Mark: move synchronized keyword to function
+			// update versionID
 			oriPath_verID.put(oriPath, oriPath_verID.get(oriPath) + 1);
 			
 			System.out.println("file " + oriPath + "'s verID update to " + oriPath_verID.get(oriPath));
-
 			System.out.println("Write " + buf.length + " byte: " + buf);
 			print_cache();
 			System.out.println(" ");

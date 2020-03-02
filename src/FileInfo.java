@@ -14,7 +14,7 @@ public class FileInfo implements Serializable {
     public FileInfo() {}
 
     // for directory/file without data
-    public FileInfo( String path, Boolean isChunking, long length ) {
+    public FileInfo( String path, Boolean isChunking, long length, int versionID ) {
         this.isChunking = isChunking;
         if (this.isChunking)
             this.isFile = true;
@@ -23,7 +23,7 @@ public class FileInfo implements Serializable {
         this.path = path;
         this.length = length;
         this.filedata = null;
-        this.versionID = -1;
+        this.versionID = versionID;
     }
 
     // for file with data

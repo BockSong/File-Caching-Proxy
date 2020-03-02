@@ -95,7 +95,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             }
             else if (!file.isFile()) {
                 System.out.println("        this is a directory. ");
-                fi = new FileInfo(path, false, 0);
+                fi = new FileInfo(path, false, 0, -1);
             }
             else {
                 // for the first time a file is requested, record its versionID
@@ -116,7 +116,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
                 }
                 else {
                     // send an empty fi indicating will be using chunking
-                    fi = new FileInfo(path, true, file.length());
+                    fi = new FileInfo(path, true, file.length(), oriPath_verID.get(path));
                 }
             }
         } catch(Exception e) {
