@@ -1,4 +1,9 @@
-/* proxy.java */
+/* 
+ * proxy.java 
+ * 
+ * A file proxy based on LRU caching.
+ * 
+ * */
 
 import java.io.*;
 import java.rmi.Naming;
@@ -9,7 +14,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.concurrent.*;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 class Proxy {
 
@@ -52,9 +56,6 @@ class Proxy {
 	private static ConcurrentHashMap<String, String> opened_path = new 
 								ConcurrentHashMap<String, String>();
 	
-	private static ConcurrentHashMap<String, ReentrantReadWriteLock> file_lock = new 
-								ConcurrentHashMap<String, ReentrantReadWriteLock>();
-
 	private static String cachedir;
 	private static int cachesize;
 	private static int sizeCached;  // keep this lower than cachesize all the time
@@ -82,8 +83,6 @@ class Proxy {
 
 	private static String copyPath2localPath( String path ) {
 		String localPath = path.substring(0, path.lastIndexOf(cache_split));
-		//System.out.println("[copyPath2localPath] copyPath: " + path);
-		//System.out.println("[copyPath2localPath] localPath: " + localPath);
 		return localPath;
 	}
 
@@ -99,16 +98,6 @@ class Proxy {
 					BufferedInputStream(new FileInputStream(srcPath));
 			RandomAccessFile writer;
 
-			if (!file_lock.containsKey(srcPath)) {
-				file_lock.put(srcPath, new ReentrantReadWriteLock());
-			}
-			file_lock.get(srcPath).readLock().lock();
-
-			if (!file_lock.containsKey(desPath)) {
-				file_lock.put(desPath, new ReentrantReadWriteLock());
-			}
-			file_lock.get(desPath).writeLock().lock();
-
 			// use cache lock to ensure safely when modifying sizeCached
 			synchronized (cache_lock) {
 				// first clear desPath if it already contains sth
@@ -122,11 +111,8 @@ class Proxy {
 				}
 				// before writing, check that if there's enough space in cache
 				while (sizeCached + file_len > cachesize) {
-					System.out.println("Not enough. sizeCache: " + sizeCached + 
-														"; file_len:" + file_len);
 					if (cache_evict() != 0) {
 						System.out.println("[copy_file] Error occured in eviction");
-						System.exit(-1);
 					}
 				}
 				writer = new RandomAccessFile(desPath, "rw");
@@ -147,21 +133,16 @@ class Proxy {
 						reader.read(buffer, 0, buffer.length);
 						writer.write(buffer);
 						sent_len += send;
-						System.out.println("[copy_file] copied " + send + " bytes to " + desPath);
 					}
 				}
 				sizeCached += file_len;
 			}
 			reader.close();
 			writer.close();
-			System.out.println("[copy_file] copy successfully, " + file_len + " bytes in total.");
 
 		} catch (Exception e) {
 			System.out.println("Error in copy_file: " + e.getMessage());
 			e.printStackTrace();
-		} finally {
-			file_lock.get(srcPath).readLock().unlock();
-			file_lock.get(desPath).writeLock().unlock();
 		}
 	}
 
@@ -182,7 +163,7 @@ class Proxy {
 			File copyDir = new File(oriPath + cache_split);
 			// if it doesn't exist, create this directory
 			if ( !copyDir.exists() && !copyDir.mkdirs() ) {
-				System.out.println("[make_copy] Error: unable to make new directory in cache!");
+				System.out.println("Error: unable to make new directory in cache!");
 			};
 	
 			if (mode == "r") {
@@ -196,7 +177,6 @@ class Proxy {
 					copyPath = oriPath + cache_split + fileName + "_" + i;
 					copyFile = new File(copyPath);
 					if (!copyFile.exists()) {
-						System.out.println("[make_copy] Path is set as: " + copyPath);
 						break;
 					}
 				}
@@ -250,7 +230,6 @@ class Proxy {
 						}
 					}
 				}
-				System.out.println("[update_copy] copy removed from " + copyPath);
 			}
 
 			// now redirect fd to the original file
@@ -269,7 +248,6 @@ class Proxy {
 	 * return 0 on success. If cache is empty, return -1. If there's other error, return -2.
 	 */
 	private synchronized static int cache_evict() {
-		System.out.println("[cache_evict] Cache usage: " + sizeCached + "/" + cachesize);
 		// if cache is already empty, return an error
 		if (LRU_cache.size() == 0)
 			return -1;
@@ -292,7 +270,6 @@ class Proxy {
 			f_evict = new File(path_evict);
 
 			synchronized (cache_lock) {
-				System.out.println("[cache_evict] Eviction: path: " + path_evict + "; length: " + f_evict.length());
 				sizeCached -= f_evict.length();
 
 				// remove it in LRU_cache
@@ -303,7 +280,6 @@ class Proxy {
 					System.out.println("[cache_evict] Error: delete file failed from " + path_evict);
 				}
 			}
-			System.out.println("[cache_evict] Cache usage: " + sizeCached + "/" + cachesize);
 			return 0;
 		} catch (Exception e) {
             System.out.println("[cache_evict] Error: " + e.getMessage());
@@ -370,14 +346,11 @@ class Proxy {
 
 			localPath = ori2localPath(oriPath);
 			f = new File(localPath);
-			System.out.println("--[OPEN] called from localPath: " + localPath);
 
 			try {
-				System.out.println("CanonicalPath: " + f.getCanonicalPath());
 				// if it's already opened, use the same path format as the first one
 				if ( opened_path.containsKey(f.getCanonicalPath()) ) {
 					oriPath = opened_path.get(f.getCanonicalPath());
-					System.out.println("Find existing path format: " + oriPath);
 					localPath = ori2localPath(oriPath);
 					f = new File(localPath);
 				}
@@ -394,12 +367,6 @@ class Proxy {
 				}
 				
 				remote_verID = server.getVersionID(oriPath);
-				if (f.exists() && f.isFile()) {
-					System.out.println("found local_verID: " + oriPath_verID.get(oriPath) + 
-														" remote_verID: " + remote_verID);
-				}
-				else
-					System.out.println("get remote_verID: " + remote_verID);
 
 				// check if we need to update cache
 				if (remote_verID == -1) {
@@ -425,11 +392,6 @@ class Proxy {
 						byte[] fi_data;
 						RandomAccessFile writer;
 
-						if (!file_lock.containsKey(localPath)) {
-							file_lock.put(localPath, new ReentrantReadWriteLock());
-						}
-						file_lock.get(localPath).writeLock().lock();
-			
 						// use cache lock to ensure safely on use of sizeCached
 						synchronized (cache_lock) {
 							// first clear original file and cache counting if it is not empty
@@ -445,8 +407,6 @@ class Proxy {
 							
 							// check that if there's enough space in cache to write
 							while (sizeCached + file_len > cachesize) {
-								System.out.println("Not enough. sizeCache: " + sizeCached 
-																+ "; file_len:" + file_len);
 								if (cache_evict() != 0)
 									System.out.println("[open] Error occured in eviction");
 							}
@@ -471,9 +431,6 @@ class Proxy {
 							sizeCached += file_len;
 						}
 						writer.close();
-						System.out.println("download successfully to: " + oriPath);
-
-						file_lock.get(localPath).writeLock().unlock();
 
 						// update the file-verID pair
 						// If multiple clients try to update same pair, the last will win
@@ -485,9 +442,6 @@ class Proxy {
 							System.out.println("[open] Error: unable to make new directory in cache!");
 						};
 					}
-				}
-				else {
-					System.out.println("[open] No need to download file. ");
 				}
 			} catch (Exception e) {
 				System.out.println("[open] Error: " + e.getMessage());
@@ -564,10 +518,6 @@ class Proxy {
 					return EIO;
 				}
 			}
-
-			System.out.println("OPEN call done from " + fd + " mode: " + mode);
-			print_cache();
-			System.out.println(" ");
 			return fd;
 		}
 
@@ -583,7 +533,6 @@ class Proxy {
 			int local_verID, remote_verID;
 			String oriPath, localPath;
 			RandomAccessFile raf;
-			System.out.println("--[CLOSE] called from " + fd);
 			if (!fd_raf.containsKey(fd))
 				return Errors.EBADF;
 
@@ -600,7 +549,6 @@ class Proxy {
 				
 				// set f as the most recent one in LRU_cache (automatically done by LinkedHashmap)
 				LRU_cache.get(localPath);
-				System.out.println("File usage recorded: " + localPath);
 
 				// if f is a file and it's newer than server, then upload it to server
 				if (!f.isDirectory() && (local_verID > remote_verID)) {
@@ -608,14 +556,7 @@ class Proxy {
 					raf.close();
 					
 					// use RPC call to upload a file from cache
-					System.out.println("Local verID: " + local_verID + " (" + remote_verID + ")");
-					System.out.println("uploading of oriPath: " + oriPath);
 					
-					if (!file_lock.containsKey(localPath)) {
-						file_lock.put(localPath, new ReentrantReadWriteLock());
-					}
-					file_lock.get(localPath).readLock().lock();
-
 					BufferedInputStream reader = new 
 					BufferedInputStream(new FileInputStream(localPath));
 					FileInfo fi;
@@ -651,10 +592,6 @@ class Proxy {
 					}
 					reader.close();
 					fd_raf.remove(fd);
-					file_lock.get(localPath).readLock().unlock();
-				}
-				else {
-					System.out.println("Local file didn't change. ");
 				}
 
 				fd_f.remove(fd);
@@ -670,9 +607,6 @@ class Proxy {
 				System.out.println("[close] Error: " + e.getMessage());
 				e.printStackTrace();
 			}
-
-			print_cache();
-			System.out.println(" ");
 			return 0;
 		}
 
@@ -685,11 +619,9 @@ class Proxy {
 		 * the error.
 		 */  
 		public synchronized long write( int fd, byte[] buf ) {
-			File f = null;
+			File f;
 			String oriPath, mode;
 			RandomAccessFile raf;
-			System.out.println("--[WRITE] called from " + fd);
-
 			try {
 				if (!fd_f.containsKey(fd))
 					return Errors.EBADF;
@@ -705,18 +637,11 @@ class Proxy {
 				raf = fd_raf.get(fd);
 				long change = raf.getFilePointer() + buf.length - f.length();
 	
-				if (!file_lock.containsKey(f.getPath())) {
-					file_lock.put(f.getPath(), new ReentrantReadWriteLock());
-				}
-				file_lock.get(f.getPath()).writeLock().lock();
-	
 				// use lock to ensure safely to unit operation on sizeCached
 				synchronized (cache_lock) {
 					sizeCached -= f.length();
 					// before writing, check that if there's enough space in cache
 					while (sizeCached + change > cachesize) {
-						System.out.println("Not enough. sizeCache: " + sizeCached 
-													+ "; file change:" + change);
 						if (cache_evict() != 0)
 							System.out.println("[open] Error occured in eviction");
 					}
@@ -728,8 +653,6 @@ class Proxy {
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
 				return EIO;
-			} finally {
-				file_lock.get(f.getPath()).writeLock().unlock();
 			}
 
 			oriPath = local2oriPath( copyPath2localPath(f.getPath()) );
@@ -737,11 +660,6 @@ class Proxy {
 			// Mark: move synchronized keyword to function
 			// update versionID
 			oriPath_verID.put(oriPath, oriPath_verID.get(oriPath) + 1);
-			
-			System.out.println("file " + oriPath + "'s verID update to " + oriPath_verID.get(oriPath));
-			System.out.println("Write " + buf.length + " byte: " + buf);
-			print_cache();
-			System.out.println(" ");
 			return buf.length;
 		}
 
@@ -757,7 +675,6 @@ class Proxy {
 			File f;
 			int read_len;
 			RandomAccessFile raf;
-			System.out.println("--[READ] called from " + fd);
 			if (!fd_f.containsKey(fd))
 				return Errors.EBADF;
 
@@ -767,27 +684,15 @@ class Proxy {
 
 			raf = fd_raf.get(fd);
 
-			if (!file_lock.containsKey(f.getPath())) {
-				file_lock.put(f.getPath(), new ReentrantReadWriteLock());
-			}
-			file_lock.get(f.getPath()).readLock().lock();
-
 			try {
 				// just local execution
 				read_len = raf.read(buf);
 			} catch (Exception e) {
 				System.out.println("throw IO exception");
 				return EIO;
-			} finally {
-				file_lock.get(f.getPath()).readLock().unlock();
 			}
-			
 			if (read_len == -1)
 				read_len = 0;
-
-			System.out.println("Read " + read_len + " byte: " + buf);
-			print_cache();
-			System.out.println(" ");
 			return read_len;
 		}
 
@@ -803,7 +708,6 @@ class Proxy {
 			File f;
 			long seek_loc = pos;
 			RandomAccessFile raf;
-			System.out.println("--[LSEEK] called from " + fd);
 			if (!fd_f.containsKey(fd))
 				return Errors.EBADF;
 
@@ -836,10 +740,6 @@ class Proxy {
 				System.out.println("throw IO exception");
 				return EIO;
 			}
-
-			System.out.println("pos: " + pos);
-			print_cache();
-			System.out.println(" ");
 			return seek_loc;
 		}
 
@@ -854,7 +754,6 @@ class Proxy {
 			int rv = -1;
 			String localPath = ori2localPath(path);
 			File f;
-			System.out.println("--[UNLINK] called from " + path);
 			
 			try {
 				// delete the file from server
@@ -898,8 +797,6 @@ class Proxy {
 				System.out.println("[unlink] Error: " + e.getMessage());
 				e.printStackTrace();
 			}
-			print_cache();
-			System.out.println(" ");
 			return rv;
 		}
 
@@ -938,8 +835,6 @@ class Proxy {
 			port = 15440;
 			ca_size = 100000;
 		}
-		System.out.println("Server ip: " + serverip + "\nServer port: " + port);
-		System.out.println("cachedir: " + ca_dir + "\ncachesize: " + ca_size);
 
 		init(ca_dir, ca_size);
 		System.out.println("Proxy initialized.");

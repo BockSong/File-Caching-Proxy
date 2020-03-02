@@ -1,4 +1,10 @@
-/* Server.java */
+/* 
+ *
+ * Server.java 
+ * 
+ * Server class which implement session semantics.
+ * 
+ */
 
 import java.io.*;
 import java.util.List;
@@ -40,15 +46,12 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
     public synchronized int getVersionID( String path ) {
         File file = new File(getRemotepath(path));
         if (!file.exists()) {
-            System.out.println("---" + path + " doesn't exists. ");
             return -1;
         }
         if (oriPath_verID.containsKey(path)) {
-            System.out.println("---" + path + " is in hashmap: " + oriPath_verID.get(path));
             return oriPath_verID.get(path);
         }
         else {
-            System.out.println("---" + path + " hasn't been requested. ");
             return 0;
         }
     }
@@ -58,7 +61,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             throws RemoteException {
         FileInfo fi;
         String remotePath = getRemotepath(path);
-        System.out.println("[getChunk] remotePath: " + remotePath);
         try {
             File file = new File(remotePath);
             long send_len = Math.min(MAX_LEN, file.length() - offset);
@@ -69,8 +71,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             reader.read(buffer);
             reader.close();
             fi = new FileInfo(path, buffer, oriPath_verID.get(path), true, file.length());
-            System.out.println("        file compressed " + send_len + " bytes with ID "
-                                                        + fi.versionID);
         } catch(Exception e) {
             System.out.println("[getChunk] Error: " + e.getMessage());
             e.printStackTrace();
@@ -84,17 +84,14 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             throws RemoteException {
         FileInfo fi;
         String remotePath = getRemotepath(path);
-        System.out.println("[getFile] remotePath: " + remotePath);
 
         try {
             File file = new File(remotePath);
             if (!file.exists()) {
                 // This branch shouldn't be executed until an error happens
-                System.out.println("[getFile] Error: this Dir/path doesn't exist ");
                 fi = null;
             }
             else if (!file.isFile()) {
-                System.out.println("        this is a directory. ");
                 fi = new FileInfo(path, false, 0, -1);
             }
             else {
@@ -111,8 +108,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
                     reader.close();
 
                     fi = new FileInfo(path, buffer, oriPath_verID.get(path), false, file.length());
-                    System.out.println("        file compressed successfully with ID "
-                                                                + oriPath_verID.get(path));
                 }
                 else {
                     // send an empty fi indicating will be using chunking
@@ -133,15 +128,12 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
         try {
             String remotePath = getRemotepath(fi.path);
             byte[] fi_data = fi.filedata;
-            System.out.println("[setChunk] remotePath: " + remotePath);
     
             File file = new File(remotePath);
 			RandomAccessFile writer = new RandomAccessFile(remotePath, "rw");
             writer.seek(offset);
             writer.write(fi_data);
             writer.close();
-            System.out.println("        file loaded " + fi_data.length + " bytes with ID "
-                                                        + fi.versionID);
         } catch (Exception e) {
             System.out.println("[setChunk] Error: " + e.getMessage());
             e.printStackTrace();
@@ -154,7 +146,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
         try {
             String remotePath = getRemotepath(fi.path);
             byte[] fi_data = fi.filedata;
-            System.out.println("[setFile] remotePath: " + remotePath);
     
             File file = new File(remotePath);
             File Dir = new File(remotePath.substring(0, remotePath.lastIndexOf("/")) );
@@ -165,7 +156,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             
 			// update versionID once received the file
             oriPath_verID.put(fi.path, fi.versionID);
-            System.out.println("        file loading with ID " + fi.versionID);
 
             // if not chunking ,write it directly. otherwise write in setChunk()
             if (!fi.isChunking) {
@@ -174,8 +164,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
                 writer.write(fi_data, 0, fi_data.length);
                 writer.flush();
                 writer.close();
-                System.out.println("        file loaded successfully with ID "
-                                                            + fi.versionID);
             }
         } catch (Exception e) {
             System.out.println("[setFile] Error: " + e.getMessage());
@@ -188,7 +176,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             throws RemoteException {
         try {
             String remotePath = getRemotepath(path);
-            System.out.println("[unlink] remotePath: " + remotePath);
     
             File file = new File(remotePath);
 			if (!file.exists())
@@ -202,7 +189,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
             
 			// delete its pair in hashmap
             oriPath_verID.remove(path);
-            System.out.println("        file unlinked.");
         } catch (Exception e) {
             System.out.println("Error in setFile: " + e.getMessage());
             e.printStackTrace();
@@ -227,7 +213,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			port = 15440;
 		}
 		rootdir = args[1];
-		System.out.println("port: " + port + "\nrootdir: " + rootdir);
 
         try { // create registry if it doesn't exist
             LocateRegistry.createRegistry(port);
